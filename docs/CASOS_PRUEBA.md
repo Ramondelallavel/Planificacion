@@ -72,7 +72,7 @@ ocupación y seguridad (hash de contraseñas y tokens).
 
 ## Resultados de referencia
 
-- 40 pruebas superadas en SQLite (las 39 anteriores a la corrección del simulador, también en PostgreSQL 16).
+- 40 pruebas superadas en SQLite y en PostgreSQL 16.
 - Tanda 2210: 99 páginas en 2 bloques (~1,6 s en el entorno de pruebas), 130 OF con hoja propia más
   9 referenciadas sin hoja, 970 líneas, 2 aparatos, 36 bultos, 149 dependencias, 0 ciclos. Con la fábrica de
   ejemplo: 140 operaciones planificadas y 8 no planificables, todas explicadas (sección `PLPINO`
