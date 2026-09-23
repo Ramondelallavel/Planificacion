@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, ErrorApi, puede } from '../api'
 import { useSesion } from '../App'
 import { Cargando, MensajeError, Modal, useDatos } from '../componentes/comunes'
@@ -47,7 +48,8 @@ const TIPOS_INCIDENCIA: [string, string][] = [
 export default function Operario() {
   const { sesion } = useSesion()
   const supervisa = puede(sesion, 'fichar_supervisado')
-  const [elegido, setElegido] = useState<number | null>(sesion?.operario_id ?? null)
+  const [params] = useSearchParams()
+  const [elegido, setElegido] = useState<number | null>((supervisa && Number(params.get('operario'))) || sesion?.operario_id || null)
   const operarios = useDatos(() => (supervisa ? api.get<{ id: number; codigo: string; nombre: string; turno: string | null }[]>('/operarios') : Promise.resolve([])), [supervisa])
   const oid = elegido ?? sesion?.operario_id ?? null
   const trabajo = useDatos(() => (oid ? api.get<Trabajo>(`/operario/trabajo${oid !== sesion?.operario_id ? `?operario_id=${oid}` : ''}`) : Promise.resolve(null)), [oid], 30000)

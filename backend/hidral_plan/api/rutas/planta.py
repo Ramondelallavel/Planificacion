@@ -182,14 +182,31 @@ def cerrar(inc_id: int, s: Session = Depends(get_sesion), u: UsuarioActual = Dep
     return {"id": i.id, "estado": i.estado}
 
 
-@router.get("/notificaciones")
-def notificaciones(s: Session = Depends(get_sesion), u: UsuarioActual = Depends(usuario_actual)) -> list[dict]:
-    q = select(Notificacion).order_by(Notificacion.id.desc()).limit(50)
+def _visibles(u: UsuarioActual, solo_roles: bool = False):
+    q = select(Notificacion)
     if u.operario_id and not u.puede("ver"):
-        q = q.where(Notificacion.operario_id == u.operario_id)
-    elif not u.operario_id:
-        q = q.where((Notificacion.rol_destino.is_not(None)) | (Notificacion.operario_id.is_not(None)))
-    return [{"id": n.id, "fecha": n.fecha.isoformat(), "titulo": n.titulo, "mensaje": n.mensaje, "nivel": n.nivel, "leida": n.leida, "operario_id": n.operario_id, "rol": n.rol_destino} for n in s.scalars(q)]
+        return q.where(Notificacion.operario_id == u.operario_id)
+    if solo_roles:
+        # centro de avisos de mandos: lo dirigido a un rol, no los cambios de carga de cada operario
+        return q.where(Notificacion.rol_destino.is_not(None))
+    if not u.operario_id:
+        return q.where((Notificacion.rol_destino.is_not(None)) | (Notificacion.operario_id.is_not(None)))
+    return q
+
+
+@router.get("/notificaciones")
+def notificaciones(solo_roles: bool = False, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(usuario_actual)) -> list[dict]:
+    q = _visibles(u, solo_roles).order_by(Notificacion.id.desc()).limit(50)
+    return [{"id": n.id, "fecha": n.fecha.isoformat(), "titulo": n.titulo, "mensaje": n.mensaje, "nivel": n.nivel, "leida": n.leida, "operario_id": n.operario_id, "rol": n.rol_destino, "referencia": n.referencia} for n in s.scalars(q)]
+
+
+@router.post("/notificaciones/leidas")
+def todas_leidas(solo_roles: bool = True, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(usuario_actual)) -> dict:
+    n = 0
+    for x in s.scalars(_visibles(u, solo_roles).where(Notificacion.leida.is_(False))):
+        x.leida = True
+        n += 1
+    return {"marcadas": n}
 
 
 @router.post("/notificaciones/{nid}/leida")

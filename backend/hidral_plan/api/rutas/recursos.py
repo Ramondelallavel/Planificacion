@@ -3,7 +3,7 @@ tiempos estándar y parámetros de negocio. Todo cambio queda auditado."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ... import configuracion
-from ...modelos import Ausencia, Cualificacion, Operacion, Operario, OrdenFabricacion, ParadaRecurso, Recurso, Seccion, TiempoEstandar, Turno
+from ...modelos import Ausencia, Cualificacion, Festivo, JornadaExtra, Operacion, Operario, OrdenFabricacion, ParadaRecurso, Recurso, Seccion, TiempoEstandar, Turno
 from ...modelos.enums import EstadoOperacion, Fuente
 from ...servicios.auditoria import auditar
 from ...servicios.operaciones import derivar_operaciones
@@ -286,3 +286,69 @@ def ausencia(oid: int, datos: AusenciaIn, s: Session = Depends(get_sesion), u: U
     s.add(Ausencia(operario_id=oid, inicio=datos.inicio, fin=datos.fin, motivo=datos.motivo))
     auditar(s, u.usuario, "AUSENCIA_PLANIFICADA", "OPERARIO", oid, despues={"inicio": datos.inicio.isoformat(), "fin": datos.fin.isoformat() if datos.fin else None, "motivo": datos.motivo})
     return {"operario_id": oid}
+
+
+# ------------------------------------------------------------------ calendario laboral
+@router.get("/calendario")
+def calendario(desde: date | None = None, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+    """Festivos y jornadas extra (turnos fuera del calendario habitual) a partir de `desde`."""
+    desde = desde or ahora().date().replace(day=1)
+    return {
+        "festivos": [{"fecha": f.fecha.isoformat(), "descripcion": f.descripcion} for f in s.scalars(select(Festivo).where(Festivo.fecha >= desde).order_by(Festivo.fecha))],
+        "jornadas_extra": [
+            {"id": j.id, "fecha": j.fecha.isoformat(), "turno": j.turno_codigo, "secciones": j.secciones, "motivo": j.motivo, "creado_por": j.creado_por}
+            for j in s.scalars(select(JornadaExtra).where(JornadaExtra.fecha >= desde).order_by(JornadaExtra.fecha))
+        ],
+    }
+
+
+class FestivoIn(BaseModel):
+    fecha: date
+    descripcion: str | None = None
+
+
+@router.post("/calendario/festivos")
+def nuevo_festivo(datos: FestivoIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+    f = s.get(Festivo, datos.fecha) or Festivo(fecha=datos.fecha)
+    f.descripcion = datos.descripcion
+    s.add(f)
+    auditar(s, u.usuario, "FESTIVO", "CALENDARIO", datos.fecha.isoformat(), despues={"descripcion": datos.descripcion})
+    return {"fecha": datos.fecha.isoformat(), "aviso": "Regenera el plan para que tenga en cuenta el cambio de calendario."}
+
+
+@router.delete("/calendario/festivos/{fecha}")
+def quitar_festivo(fecha: date, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+    f = s.get(Festivo, fecha)
+    if f is None:
+        raise HTTPException(404, "Ese día no es festivo")
+    auditar(s, u.usuario, "QUITAR_FESTIVO", "CALENDARIO", fecha.isoformat(), antes={"descripcion": f.descripcion})
+    s.delete(f)
+    return {"fecha": fecha.isoformat()}
+
+
+class JornadaExtraIn(BaseModel):
+    fecha: date
+    turno: str
+    secciones: list[str] | None = None
+    motivo: str | None = None
+
+
+@router.post("/calendario/jornadas-extra")
+def nueva_jornada_extra(datos: JornadaExtraIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+    if s.get(Turno, datos.turno) is None:
+        raise HTTPException(400, f"Turno desconocido: {datos.turno}")
+    j = JornadaExtra(fecha=datos.fecha, turno_codigo=datos.turno, secciones=datos.secciones or None, motivo=datos.motivo, creado_por=u.usuario)
+    s.add(j)
+    s.flush()
+    auditar(s, u.usuario, "CREAR_JORNADA_EXTRA", "CALENDARIO", j.id, despues=datos.model_dump(mode="json"), motivo=datos.motivo)
+    return {"id": j.id, "aviso": "Regenera el plan para aprovechar la jornada extra."}
+
+
+@router.delete("/calendario/jornadas-extra/{jid}")
+def quitar_jornada_extra(jid: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+    j = s.get(JornadaExtra, jid)
+    if j is None:
+        raise HTTPException(404, "Jornada extra inexistente")
+    auditar(s, u.usuario, "QUITAR_JORNADA_EXTRA", "CALENDARIO", jid, antes={"fecha": j.fecha.isoformat(), "turno": j.turno_codigo, "secciones": j.secciones})
+    s.delete(j)
+    return {"id": jid}

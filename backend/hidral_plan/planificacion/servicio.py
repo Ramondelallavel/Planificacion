@@ -8,7 +8,7 @@ nunca modifican el plan oficial salvo aceptación explícita de un responsable.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -20,6 +20,7 @@ from ..modelos import (
     CambioPlan,
     IncidenciaDatos,
     IncidenciaProduccion,
+    JornadaExtra,
     Notificacion,
     Operacion,
     OrdenFabricacion,
@@ -132,6 +133,10 @@ def _actualizar_entidades(s: Session, inst: Instantanea, asigs: dict[int, AsigP]
     for ap_id, r in riesgos["aparatos"].items():
         ap = s.get(Aparato, ap_id)
         if ap:
+            if r["nivel"] == "ROJO" and ap.riesgo_nivel != "ROJO":
+                # aviso al planificador: el aparato acaba de pasar a no llegar a su semana
+                motivo = r["motivos"][0] if r["motivos"] else "no llega a su semana de fabricación"
+                s.add(Notificacion(rol_destino="PLANIFICADOR", titulo=f"Aparato {ap.referencia} en riesgo ROJO", mensaje=motivo, nivel="ALERTA", referencia=f"aparato:{ap.id}"))
             ap.riesgo_nivel, ap.riesgo_motivos = r["nivel"], r["motivos"]
             ap.fin_previsto = datetime.fromisoformat(r["fin_previsto"]) if r["fin_previsto"] else None
             ap.carga_restante_h = r["horas_restantes"]
@@ -891,3 +896,49 @@ __all__ = [
     "simular_escenario",
     "simular_of_urgente",
 ]
+
+
+# ------------------------------------------------------------------ aplicar las decisiones de un escenario
+SUPUESTOS = {
+    "averias": "averías",
+    "ausencias": "ausencias",
+    "faltan_operarios": "falta de operarios",
+    "falta_material": "falta de material",
+    "retrasos": "retrasos",
+    "recursos_extra": "máquinas que no existen",
+}
+
+
+def aplicar_escenario(s: Session, escenario: dict, usuario: str, ahora: datetime, motivo: str | None = None) -> dict:
+    """Hace reales las DECISIONES de un escenario what-if (turnos extra, OF adelantadas, pesos de
+    prioridad) y genera el plan oficial con ellas. Los SUPUESTOS (averías, ausencias…) describen
+    cosas que no dependen de la planta: se simulan, pero no se «aplican»."""
+    from .. import configuracion
+
+    supuestos = [txt for k, txt in SUPUESTOS.items() if escenario.get(k)]
+    if supuestos:
+        raise ValueError(f"El escenario incluye supuestos que no se pueden aplicar ({', '.join(supuestos)}). Se aplican turnos extra, OF adelantadas y pesos de prioridad.")
+    hechos: list[str] = []
+    for j in escenario.get("turnos_extra", []):
+        je = JornadaExtra(
+            fecha=date.fromisoformat(str(j["fecha"])[:10]), turno_codigo=j["turno"], secciones=j.get("secciones") or None, motivo=motivo or "Aplicado desde una simulación", creado_por=usuario
+        )
+        s.add(je)
+        s.flush()
+        donde = ", ".join(je.secciones) if je.secciones else "toda la fábrica"
+        hechos.append(f"turno extra {je.turno_codigo} el {je.fecha:%d/%m} ({donde})")
+        auditar(s, usuario, "CREAR_JORNADA_EXTRA", "CALENDARIO", je.id, despues={"fecha": je.fecha.isoformat(), "turno": je.turno_codigo, "secciones": je.secciones}, motivo=motivo)
+    for of_id in escenario.get("adelantar_of", []):
+        of = s.get(OrdenFabricacion, of_id)
+        if of is not None and not of.urgente:
+            of.urgente = True
+            hechos.append(f"OF {of.numero} urgente")
+            auditar(s, usuario, "MARCAR_URGENTE", "OF", of.numero, antes={"urgente": False}, despues={"urgente": True}, motivo=motivo)
+    if escenario.get("pesos_prioridad"):
+        actual = configuracion.obtener(s, "pesos_prioridad")
+        configuracion.guardar(s, "pesos_prioridad", {**actual, **escenario["pesos_prioridad"]}, usuario, motivo or "Aplicado desde una simulación")
+        hechos.append("pesos de prioridad")
+    if not hechos:
+        raise ValueError("El escenario no contiene ninguna decisión que aplicar.")
+    r = generar_plan(s, usuario, ahora, nombre=f"Plan con {', '.join(hechos)}"[:120], motivo=motivo)
+    return {"aplicado": hechos, **r}

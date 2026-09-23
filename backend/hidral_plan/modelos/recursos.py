@@ -76,6 +76,23 @@ class Festivo(Base):
     descripcion: Mapped[str | None] = mapped_column(String(120))
 
 
+class JornadaExtra(Base):
+    """Turno de trabajo fuera del calendario habitual (sábado, festivo trabajado, horas extra).
+
+    Suma capacidad real: el planificador abre ese turno ese día en las máquinas de las secciones
+    indicadas (todas si `secciones` es nulo) y para los operarios que trabajan en ellas."""
+
+    __tablename__ = "jornada_extra"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fecha: Mapped[date] = mapped_column(Date, index=True)
+    turno_codigo: Mapped[str] = mapped_column(String(16))
+    secciones: Mapped[list | None] = mapped_column(JSON)
+    motivo: Mapped[str | None] = mapped_column(String(200))
+    creado_por: Mapped[str | None] = mapped_column(String(60))
+    creado: Mapped[datetime] = mapped_column(DateTime, default=ahora)
+
+
 class Operario(Base):
     __tablename__ = "operario"
 

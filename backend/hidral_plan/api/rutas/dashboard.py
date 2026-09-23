@@ -268,3 +268,75 @@ def global_(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requier
         "calidad": {"incidencias_abiertas": sum(incid.values()), "por_tipo": dict(incid), "retrabajos": incid.get("CALIDAD", 0)},
         "plan": {k: kpis.get(k) for k in ("planificadas", "no_planificadas", "provisionales", "horas_planificadas", "fin_plan", "cambios_setup", "horas_muertas", "wip_medio_of", "retraso_total_h")},
     }
+
+
+@router.get("/seguimiento")
+def seguimiento(dias: int = 14, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+    """Plan frente a real: adherencia al plan, trabajos en curso fuera de tiempo y desviaciones de
+    los fichajes cerrados (por sección y tipo de operación, y las mayores)."""
+    momento = ahora()
+    desde = momento - timedelta(days=dias)
+    plan = sv.plan_activo(s)
+    ops = {o.id: o for o in s.scalars(select(Operacion))}
+    ofs = {o.id: o for o in s.scalars(select(OrdenFabricacion))}
+    oprs = {o.id: o for o in s.scalars(select(Operario))}
+    recs = {r.id: r for r in s.scalars(select(Recurso))}
+
+    # adherencia: de lo que el plan activo preveía terminar ya, cuánto está terminado
+    debidas = terminadas = 0
+    retrasadas: list[dict] = []
+    if plan is not None:
+        for a in s.scalars(select(AsignacionPlan).where(AsignacionPlan.plan_id == plan.id, AsignacionPlan.fin <= momento)):
+            op = ops.get(a.operacion_id)
+            if op is None:
+                continue
+            debidas += 1
+            if op.estado == "TERMINADA":
+                terminadas += 1
+            elif len(retrasadas) < 20:
+                retrasadas.append({"of": ofs[op.of_id].numero, "of_id": op.of_id, "operacion": op.tipo, "fin_previsto": a.fin.isoformat(), "estado": op.estado,
+                                   "recurso": recs[a.recurso_id].codigo if a.recurso_id in recs else None})
+
+    # en curso: minutos trabajados frente a lo previsto
+    en_curso = []
+    for f in s.scalars(select(Fichaje).where(Fichaje.estado.in_(["ABIERTO", "PAUSADO"]))):
+        trabajado = max(0.0, (momento - f.inicio).total_seconds() / 60 - (f.minutos_pausa or 0))
+        en_curso.append({
+            "fichaje_id": f.id, "operario": oprs[f.operario_id].nombre if f.operario_id in oprs else None, "of": ofs[f.of_id].numero, "of_id": f.of_id,
+            "operacion": ops[f.operacion_id].tipo if f.operacion_id in ops else None, "recurso": recs[f.recurso_id].codigo if f.recurso_id in recs else None,
+            "estado": f.estado, "inicio": f.inicio.isoformat(), "trabajado_min": round(trabajado), "previsto_min": f.duracion_planificada_min,
+            "excede": bool(f.duracion_planificada_min and trabajado > f.duracion_planificada_min * 1.15),
+        })
+    en_curso.sort(key=lambda x: (not x["excede"], -(x["trabajado_min"] or 0)))
+
+    # fichajes cerrados en el periodo
+    grupos: dict[tuple[str, str], list[float]] = defaultdict(lambda: [0, 0.0, 0.0])
+    desviaciones = []
+    for f in s.scalars(select(Fichaje).where(Fichaje.estado == "CERRADO", Fichaje.fin >= desde)):
+        op = ops.get(f.operacion_id)
+        if op is None or not f.duracion_planificada_min or f.duracion_real_min is None:
+            continue
+        g = grupos[(op.seccion_codigo or "—", op.tipo)]
+        g[0] += 1
+        g[1] += f.duracion_planificada_min
+        g[2] += f.duracion_real_min
+        desviaciones.append({
+            "of": ofs[f.of_id].numero, "of_id": f.of_id, "operacion": op.tipo, "seccion": op.seccion_codigo, "operario": oprs[f.operario_id].nombre if f.operario_id in oprs else None,
+            "fin": f.fin.isoformat(), "previsto_min": round(f.duracion_planificada_min, 1), "real_min": round(f.duracion_real_min, 1),
+            "desviacion_min": round(f.duracion_real_min - f.duracion_planificada_min, 1),
+        })
+    por_tipo = [
+        {"seccion": sec, "operacion": tipo, "fichajes": int(n), "previsto_min": round(p), "real_min": round(r), "desviacion_pct": round(100 * (r - p) / p, 1) if p else None}
+        for (sec, tipo), (n, p, r) in sorted(grupos.items())
+    ]
+    desviaciones.sort(key=lambda d: -abs(d["desviacion_min"]))
+    total_p = sum(g[1] for g in grupos.values())
+    total_r = sum(g[2] for g in grupos.values())
+    return {
+        "ahora": momento.isoformat(), "dias": dias,
+        "adherencia": {"debidas": debidas, "terminadas": terminadas, "pct": round(terminadas / debidas, 3) if debidas else None, "pendientes": retrasadas},
+        "en_curso": en_curso,
+        "resumen": {"fichajes": sum(int(g[0]) for g in grupos.values()), "previsto_min": round(total_p), "real_min": round(total_r), "desviacion_pct": round(100 * (total_r - total_p) / total_p, 1) if total_p else None},
+        "por_tipo": por_tipo,
+        "mayores_desviaciones": desviaciones[:15],
+    }

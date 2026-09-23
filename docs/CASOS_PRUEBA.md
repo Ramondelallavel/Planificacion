@@ -2,7 +2,7 @@
 
 ```bash
 cd backend
-python -m pytest                        # 40 pruebas; SQLite temporal por prueba
+python -m pytest                        # 54 pruebas; SQLite temporal por prueba
 HIDRAL_TEST_DB_URL=postgresql+psycopg://usuario@host/bd_pruebas python -m pytest   # misma batería en PostgreSQL (vacía esa base)
 ```
 
@@ -65,6 +65,30 @@ Se ejecutan si `backend/tests/fixtures/07_Tanda_EH-2210_OrdenesFab.pdf` existe (
 | `test_reanudacion_tras_caida` | un trabajo interrumpido continúa desde su último bloque sin duplicar datos |
 | `test_what_if_no_modifica_el_plan_real` | el simulador no toca el plan oficial |
 | `test_what_if_incremental_conserva_lo_que_ya_no_era_planificable` | en una simulación incremental, lo que ya no era planificable sigue sin serlo: una avería no puede mejorar el cumplimiento |
+| `test_calendario_por_api` | alta y baja de festivos y jornadas extra por sección, turno inexistente rechazado, un operario no puede tocar el calendario, cambios auditados |
+| `test_mapa_de_capacidad` | ocupación frente a capacidad por máquina y día: el fin de semana sin capacidad, hay carga planificada, y una jornada extra el sábado añade capacidad ese día |
+| `test_busqueda_global` | la búsqueda encuentra OF, aparatos, máquinas y operarios con la ruta a su pantalla |
+| `test_seguimiento_plan_frente_a_real` | sin fichajes todo a cero; un trabajo iniciado (autorizado por el jefe de equipo) aparece en curso y, al terminarlo, en las desviaciones real/previsto |
+| `test_centro_de_avisos` | un aparato que pasa a riesgo rojo avisa una sola vez al planificador; los avisos de mandos no incluyen los de cada operario; marcar todos como leídos |
+| `test_priorizar_tanda_y_aparato` | priorizar un aparato y luego la tanda solo cambia las OF que faltaban; se deshace; sin permiso, 403; queda auditado |
+
+## Calendario (`tests/test_calendario.py`)
+
+| Prueba | Qué se comprueba |
+|---|---|
+| `test_jornada_extra_abre_el_sabado_y_festivo_cierra_el_martes` | una jornada extra abre un sábado y un festivo cierra un día laborable, para máquinas y operarios |
+| `test_jornada_extra_de_una_seccion_solo_afecta_a_esa_seccion` | la jornada extra limitada a una sección solo abre sus máquinas y a los operarios cualificados en ellas |
+| `test_simular_turno_extra_y_aplicarlo` | simular un turno extra no crea nada real; aplicarlo crea la jornada extra y un plan nuevo |
+| `test_los_supuestos_no_se_aplican` | averías, ausencias o retrasos de un escenario no se pueden «aplicar»: se registran como incidencia |
+
+## Edición navegador (`tests/test_navegador.py`)
+
+| Prueba | Qué se comprueba |
+|---|---|
+| `test_pbkdf2_sin_openssl_coincide` | el PBKDF2 en Python puro (Pyodide no trae `hashlib.pbkdf2_hmac`) da lo mismo que OpenSSL |
+| `test_api_completa_sin_servidor_ni_hilos` | la API entera a través del adaptador sin HTTP ni hilos: login, subida multipart, procesamiento paso a paso, plan, imagen de página, cierre y reapertura |
+| `test_procesamiento_limitado_por_bloques` | cada paso procesa un solo bloque y el trabajo se completa en varios |
+| `test_carga_de_ejemplo_genera_plan` | la tanda de ejemplo se carga y genera el plan inicial (se omite sin el PDF real) |
 
 Además, `tests/test_unitarios.py` cubre números en formato español, parámetros, semana desde `S40`,
 ventanas de turno con pausas y fin de semana, reparto de operaciones entre turnos, paradas,
@@ -72,7 +96,7 @@ ocupación y seguridad (hash de contraseñas y tokens).
 
 ## Resultados de referencia
 
-- 40 pruebas superadas en SQLite y en PostgreSQL 16.
+- 54 pruebas superadas en SQLite y en PostgreSQL 16.
 - Tanda 2210: 99 páginas en 2 bloques (~1,6 s en el entorno de pruebas), 130 OF con hoja propia más
   9 referenciadas sin hoja, 970 líneas, 2 aparatos, 36 bultos, 149 dependencias, 0 ciclos. Con la fábrica de
   ejemplo: 140 operaciones planificadas y 8 no planificables, todas explicadas (sección `PLPINO`

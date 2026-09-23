@@ -11,12 +11,14 @@ Resultado en frontend/dist-navegador/:
     motor/paquetes/…      dependencias Python y el propio backend (hidral_plan)
     motor/paquetes.json   manifiesto que lee el worker
 
-Las ruedas se descargan de PyPI y se comprueban con su SHA-256 publicado. Los ficheros de más de
-14 MB se trocean (algunos alojamientos limitan el tamaño por fichero) y el worker los une.
+Las ruedas se descargan de PyPI y se comprueban con su SHA-256 publicado. Los archivos (ruedas,
+zip) se guardan como texto base64 en ficheros .txt de hasta 12 MB: las páginas publicadas solo
+sirven tipos web estándar y limitan el tamaño por fichero. El worker los decodifica y los une.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import json
@@ -34,7 +36,7 @@ FRONT = RAIZ / "frontend"
 BACK = RAIZ / "backend"
 SALIDA = FRONT / "dist-navegador"
 CACHE = FRONT / ".cache-navegador"
-MAX_TROZO = 14 * 1024 * 1024
+MAX_TROZO = 12 * 1024 * 1024  # caracteres base64 por fichero (múltiplo de 4)
 
 # Versiones para Pyodide 314 (Python 3.14). pydantic-core solo tiene rueda WebAssembly desde la
 # 2.47, que corresponde a pydantic 2.14 (beta). PyMuPDF publica rueda abi3 para emscripten.
@@ -54,7 +56,7 @@ RUEDAS = [
     ("annotated-doc", "0.0.5", "py3-none-any"),
 ]
 PYYAML = "6.0.3"  # solo su parte en Python puro (sin libyaml)
-NUCLEO_PYODIDE = ["pyodide.mjs", "pyodide.asm.mjs", "pyodide.asm.wasm", "python_stdlib.zip", "pyodide-lock.json"]
+NUCLEO_PYODIDE = ["pyodide.mjs", "pyodide.asm.mjs", "pyodide.asm.wasm", "pyodide-lock.json"]  # + python_stdlib.zip en base64
 
 
 def descargar_pypi(nombre: str, version: str, etiqueta: str) -> Path:
@@ -110,20 +112,19 @@ def tanda_ejemplo(destino: Path) -> None:
 
 
 def trocear(datos: bytes, carpeta: Path, nombre: str) -> list[str]:
-    if len(datos) <= MAX_TROZO:
-        (carpeta / nombre).write_bytes(datos)
-        return [f"paquetes/{nombre}"]
+    """Guarda `datos` como texto base64 en uno o varios ficheros .txt; devuelve sus rutas."""
+    texto = base64.b64encode(datos).decode("ascii")
     partes = []
-    for i in range(0, len(datos), MAX_TROZO):
-        parte = f"{nombre}.parte{i // MAX_TROZO}.bin"
-        (carpeta / parte).write_bytes(datos[i : i + MAX_TROZO])
-        partes.append(f"paquetes/{parte}")
+    for i in range(0, len(texto), MAX_TROZO):
+        parte = f"{nombre}.b64.{i // MAX_TROZO}.txt"
+        (carpeta / parte).write_text(texto[i : i + MAX_TROZO], encoding="ascii")
+        partes.append(f"{carpeta.name}/{parte}")
     return partes
 
 
 def pagina_autocontenida(indice: str) -> str:
     """index.html de Vite → fragmento con el CSS y el JS de la interfaz en línea."""
-    titulo = re.search(r"<title>.*?</title>", indice, re.S).group(0)
+    titulo = "<title>Planificación HIDRAL</title>"  # nombre de la página publicada
     css = "".join((SALIDA / m).read_text() for m in re.findall(r'<link rel="stylesheet"[^>]*href="\./([^"]+)"', indice))
     js = "".join((SALIDA / m).read_text() for m in re.findall(r'<script type="module"[^>]*src="\./([^"]+)"', indice))
     js = js.replace("</script", "<\\/script")
@@ -145,14 +146,15 @@ def main() -> None:
     for f in NUCLEO_PYODIDE:
         shutil.copy(FRONT / "node_modules" / "pyodide" / f, motor / "pyodide" / f)
     shutil.copy(FRONT / "navegador" / "motor.js", motor / "motor.js")
+    stdlib = (FRONT / "node_modules" / "pyodide" / "python_stdlib.zip").read_bytes()
+    biblioteca = {"bytes": len(stdlib), "partes": trocear(stdlib, motor / "pyodide", "python_stdlib.zip")}
 
     print("3/5 dependencias Python")
     paquetes = []
     for nombre, version, etiqueta in RUEDAS:
         rueda = descargar_pypi(nombre, version, etiqueta)
         datos = rueda.read_bytes()
-        # «.whl» no es un tipo web estándar: se publica como .zip; el worker lo instala como rueda
-        paquetes.append({"nombre": nombre, "tipo": "wheel", "bytes": len(datos), "partes": trocear(datos, motor / "paquetes", rueda.stem + ".zip")})
+        paquetes.append({"nombre": nombre, "tipo": "wheel", "bytes": len(datos), "partes": trocear(datos, motor / "paquetes", rueda.name)})
     datos = yaml_puro().read_bytes()
     paquetes.append({"nombre": "pyyaml", "tipo": "zip", "destino": "/lib/python3.14/site-packages", "bytes": len(datos), "partes": trocear(datos, motor / "paquetes", "pyyaml-puro.zip")})
 
@@ -162,17 +164,20 @@ def main() -> None:
     shutil.copy(BACK / "config" / "fabrica_ejemplo.yaml", motor / "fabrica_ejemplo.txt")
     tanda_ejemplo(motor / "TANDA_EJEMPLO_9001.pdf")
     (motor / "paquetes.json").write_text(
-        json.dumps({"paquetes": paquetes, "config": "fabrica_ejemplo.txt", "ejemplo": "TANDA_EJEMPLO_9001.pdf"}, indent=1, ensure_ascii=False)
+        json.dumps({"biblioteca": biblioteca, "paquetes": paquetes, "config": "fabrica_ejemplo.txt", "ejemplo": "TANDA_EJEMPLO_9001.pdf"}, indent=1, ensure_ascii=False)
     )
 
     print("5/5 página autocontenida")
     indice = (SALIDA / "index.html").read_text()
     (SALIDA / "hidral.html").write_text(pagina_autocontenida(indice))
     total = sum(f.stat().st_size for f in SALIDA.rglob("*") if f.is_file())
-    grandes = [f for f in motor.rglob("*") if f.is_file() and f.stat().st_size > 15 * 1024 * 1024]
-    print(f"Listo: {SALIDA} · {total / 1048576:.1f} MB · {sum(1 for f in motor.rglob('*') if f.is_file())} ficheros de motor")
-    if grandes:
-        raise SystemExit(f"Ficheros de más de 15 MB: {grandes}")
+    ficheros = [f for f in motor.rglob("*") if f.is_file()]
+    grandes = [f for f in ficheros if f.stat().st_size > 15 * 1024 * 1024]
+    servidos = {".mjs", ".js", ".wasm", ".json", ".txt", ".pdf"}
+    raros = [f for f in ficheros if f.suffix not in servidos]
+    print(f"Listo: {SALIDA} · {total / 1048576:.1f} MB · {len(ficheros)} ficheros de motor")
+    if grandes or raros:
+        raise SystemExit(f"Ficheros no publicables: {grandes + raros}")
 
 
 if __name__ == "__main__":

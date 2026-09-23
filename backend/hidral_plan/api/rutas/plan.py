@@ -10,11 +10,12 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ...modelos import Aparato, AsignacionPlan, CambioPlan, Operacion, Operario, OrdenFabricacion, Plan, Recurso, Tanda, Turno
+from ... import configuracion
+from ...modelos import Aparato, AsignacionPlan, CambioPlan, DependenciaOF, Festivo, JornadaExtra, Operacion, Operario, OrdenFabricacion, Plan, Recurso, Tanda, Turno
 from ...modelos.enums import TipoPlan
 from ...planificacion import servicio as sv
 from ...planificacion.calendario import turno_desde_modelo, ventanas_turno
-from ...planificacion.modelo import cargar_instantanea
+from ...planificacion.modelo import cargar_instantanea, limite_semana
 from ..deps import UsuarioActual, ahora, get_sesion, requiere
 
 router = APIRouter(prefix="/plan", tags=["plan"])
@@ -83,6 +84,15 @@ def _cargar_asignaciones(s: Session, plan: Plan, desde: datetime | None, hasta: 
     return [_asig_json(a, ofs[a.of_id], ops[a.operacion_id], recs.get(a.recurso_id), oprs.get(a.operario_id), aps.get(ofs[a.of_id].aparato_id), tandas.get(ofs[a.of_id].tanda_id)) for a in filas]
 
 
+def _calendario(s: Session) -> tuple[set[date], dict[str, set[date]]]:
+    """Festivos y días de jornada extra por turno (para dibujar los turnos reales)."""
+    festivos = {f.fecha for f in s.scalars(select(Festivo))}
+    extras: dict[str, set[date]] = defaultdict(set)
+    for j in s.scalars(select(JornadaExtra)):
+        extras[j.turno_codigo].add(j.fecha)
+    return festivos, extras
+
+
 @router.get("/activo/gantt")
 def gantt(
     desde: datetime | None = None, hasta: datetime | None = None, seccion: str | None = None, tanda_id: int | None = None, recurso_id: int | None = None,
@@ -104,11 +114,57 @@ def gantt(
     ]
     ini = desde or (min((datetime.fromisoformat(i["inicio"]) for i in items), default=plan.ahora_referencia))
     fin = hasta or (max((datetime.fromisoformat(i["fin"]) for i in items), default=ini + timedelta(days=7)))
+    festivos, extras = _calendario(s)
     turnos = []
     for t in s.scalars(select(Turno).where(Turno.activo.is_(True))):
-        for a, b in ventanas_turno(turno_desde_modelo(t), ini - timedelta(days=1), fin + timedelta(days=1)):
-            turnos.append({"turno": t.codigo, "inicio": a.isoformat(), "fin": b.isoformat()})
-    return {"plan_id": plan.id, "ahora": ahora().isoformat(), "asignaciones": items, "recursos": recursos, "turnos": turnos, "no_planificadas": len(plan.no_planificadas or [])}
+        for a, b in ventanas_turno(turno_desde_modelo(t), ini - timedelta(days=1), fin + timedelta(days=1), festivos, extras[t.codigo]):
+            turnos.append({"turno": t.codigo, "inicio": a.isoformat(), "fin": b.isoformat(), "extra": a.date() in extras[t.codigo]})
+    of_ids = {i["of_id"] for i in items}
+    dependencias = [
+        [d.of_origen_id, d.of_destino_id]
+        for d in s.scalars(select(DependenciaOF).where(DependenciaOF.activa.is_(True), DependenciaOF.of_origen_id.in_(of_ids), DependenciaOF.of_destino_id.in_(of_ids)))
+    ]
+    cfg_semana = configuracion.obtener(s, "semana_fabricacion")
+    semanas = sorted({a.semana_codigo for a in s.scalars(select(Aparato).where(Aparato.id.in_({i["aparato_id"] for i in items if i["aparato_id"]}))) if a.semana_codigo})
+    limites = [{"semana": w, "fecha": lim.isoformat()} for w in semanas if (lim := limite_semana(w, cfg_semana))]
+    operarios = [{"id": o.id, "codigo": o.codigo_empleado, "nombre": o.nombre, "turno": o.turno_codigo} for o in s.scalars(select(Operario).where(Operario.activo.is_(True)).order_by(Operario.codigo_empleado))]
+    return {
+        "plan_id": plan.id, "ahora": ahora().isoformat(), "asignaciones": items, "recursos": recursos, "turnos": turnos, "no_planificadas": len(plan.no_planificadas or []),
+        "dependencias": dependencias, "limites": limites, "operarios": operarios,
+    }
+
+
+@router.get("/activo/capacidad")
+def capacidad(dias: int = 14, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+    """Ocupación planificada frente a capacidad real (turnos, jornadas extra, festivos, paradas),
+    por recurso y día, y agregada por sección."""
+    plan = sv.plan_activo(s)
+    momento = ahora()
+    inst = cargar_instantanea(s, momento)
+    dia0 = momento.date()
+    fechas = [dia0 + timedelta(days=i) for i in range(max(1, min(dias, 42)))]
+    limites = [(datetime.combine(d, datetime.min.time()), datetime.combine(d + timedelta(days=1), datetime.min.time())) for d in fechas]
+    ocupado: dict[int, list[float]] = defaultdict(lambda: [0.0] * len(fechas))
+    if plan is not None:
+        for a in s.scalars(select(AsignacionPlan).where(AsignacionPlan.plan_id == plan.id, AsignacionPlan.fin >= limites[0][0], AsignacionPlan.inicio <= limites[-1][1])):
+            tramos = [(datetime.fromisoformat(x), datetime.fromisoformat(y)) for x, y in (a.segmentos or [[a.inicio.isoformat(), a.fin.isoformat()]])]
+            for i, (d0, d1) in enumerate(limites):
+                ocupado[a.recurso_id][i] += sum(max(0.0, (min(b, d1) - max(x, d0)).total_seconds() / 60) for x, b in tramos)
+    recursos = []
+    por_seccion: dict[str, list[list[float]]] = {}
+    for r in sorted(inst.recursos.values(), key=lambda r: (r.seccion or "", r.codigo)):
+        v = inst.ventanas_recurso(r)
+        celdas = []
+        for i, (d0, d1) in enumerate(limites):
+            disp = v.minutos(max(d0, momento), d1) * max(1, r.capacidad)
+            celdas.append({"disponible": round(disp), "ocupado": round(min(ocupado[r.id][i], disp) if disp else ocupado[r.id][i])})
+        recursos.append({"id": r.id, "codigo": r.codigo, "nombre": r.nombre, "seccion": r.seccion, "estado": r.estado, "celdas": celdas})
+        acc = por_seccion.setdefault(r.seccion or "—", [[0.0, 0.0] for _ in fechas])
+        for i, c in enumerate(celdas):
+            acc[i][0] += c["disponible"]
+            acc[i][1] += c["ocupado"]
+    secciones = [{"seccion": k, "celdas": [{"disponible": round(a), "ocupado": round(b)} for a, b in v]} for k, v in sorted(por_seccion.items())]
+    return {"plan_id": plan.id if plan else None, "ahora": momento.isoformat(), "dias": [d.isoformat() for d in fechas], "recursos": recursos, "secciones": secciones}
 
 
 @router.get("/activo/turnos")
@@ -121,8 +177,9 @@ def plan_por_turno(dia: date | None = None, s: Session = Depends(get_sesion), _:
     ini = datetime.combine(dia, datetime.min.time())
     items = _cargar_asignaciones(s, plan, ini, ini + timedelta(days=1, hours=8))
     salida = []
+    festivos, extras = _calendario(s)
     for t in s.scalars(select(Turno).where(Turno.activo.is_(True)).order_by(Turno.hora_inicio)):
-        ventanas = ventanas_turno(turno_desde_modelo(t), ini, ini + timedelta(days=1, hours=8))
+        ventanas = ventanas_turno(turno_desde_modelo(t), ini, ini + timedelta(days=1, hours=8), festivos, extras[t.codigo])
         ventanas = [v for v in ventanas if v[0].date() == dia or (v[0].date() == dia + timedelta(days=1) and v[0].hour < 6 and t.hora_fin < t.hora_inicio)]
         if not ventanas:
             continue
@@ -228,10 +285,24 @@ def escenario(datos: Escenario, s: Session = Depends(get_sesion), u: UsuarioActu
     return sv.simular_escenario(s, datos.escenario, u.usuario, ahora(), datos.guardar)
 
 
+class AplicarEscenario(BaseModel):
+    escenario: dict
+    motivo: str | None = None
+
+
+@router.post("/simulaciones/escenario/aplicar")
+def aplicar_escenario(datos: AplicarEscenario, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
+    """Hace reales las decisiones del escenario (turnos extra, OF adelantadas, pesos) y replanifica."""
+    return sv.aplicar_escenario(s, datos.escenario, u.usuario, ahora(), datos.motivo)
+
+
 @router.get("/simulaciones")
 def simulaciones(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     return [
-        {"id": p.id, "nombre": p.nombre, "estado": p.estado, "creado": p.creado.isoformat(), "creado_por": p.creado_por, "escenario": p.escenario, "motivo": p.motivo, "plan_base_id": p.plan_base_id}
+        {
+            "id": p.id, "nombre": p.nombre, "estado": p.estado, "creado": p.creado.isoformat(), "creado_por": p.creado_por, "escenario": p.escenario, "motivo": p.motivo,
+            "plan_base_id": p.plan_base_id, "kpis": p.kpis,
+        }
         for p in s.scalars(select(Plan).where(Plan.tipo == TipoPlan.SIMULACION).order_by(Plan.id.desc()).limit(50))
     ]
 

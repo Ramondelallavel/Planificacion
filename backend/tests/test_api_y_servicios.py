@@ -226,3 +226,140 @@ def test_what_if_incremental_conserva_lo_que_ya_no_era_planificable(fabrica, imp
     assert r["kpis_base"]["no_planificadas"] == n_base
     assert r["kpis_simulado"]["no_planificadas"] >= n_base
     assert r["kpis_simulado"]["cumplimiento_semana"] <= r["kpis_base"]["cumplimiento_semana"]
+
+
+def test_calendario_por_api(cliente, fabrica):
+    h = _login(cliente, "planificador")
+    r = cliente.post("/api/calendario/jornadas-extra", headers=h, json={"fecha": "2026-09-26", "turno": "M", "secciones": ["EH"], "motivo": "recuperar"})
+    assert r.status_code == 200, r.text
+    jid = r.json()["id"]
+    assert cliente.post("/api/calendario/jornadas-extra", headers=h, json={"fecha": "2026-09-26", "turno": "XX"}).status_code == 400
+    assert cliente.post("/api/calendario/festivos", headers=h, json={"fecha": "2026-10-12", "descripcion": "Fiesta nacional"}).status_code == 200
+    cal = cliente.get("/api/calendario?desde=2026-09-01", headers=h).json()
+    assert cal["jornadas_extra"][0]["secciones"] == ["EH"] and cal["festivos"][0]["fecha"] == "2026-10-12"
+    # un operario no puede tocar el calendario
+    assert cliente.post("/api/calendario/festivos", headers=_login(cliente, "op01"), json={"fecha": "2026-10-13"}).status_code == 403
+    assert cliente.delete(f"/api/calendario/jornadas-extra/{jid}", headers=h).status_code == 200
+    assert cliente.delete("/api/calendario/festivos/2026-10-12", headers=h).status_code == 200
+    cal = cliente.get("/api/calendario?desde=2026-09-01", headers=h).json()
+    assert cal == {"festivos": [], "jornadas_extra": []}
+    assert cliente.get("/api/auditoria?entidad_tipo=CALENDARIO", headers=h).json()
+
+
+def test_mapa_de_capacidad(cliente, fabrica):
+    h = _login(cliente, "planificador")
+    r = cliente.post("/api/documentos", headers=h, files={"fichero": ("t.pdf", _pdf(fabrica).read_bytes(), "application/pdf")})
+    from hidral_plan.ingesta.cola import reclamar_trabajo
+    from hidral_plan.ingesta.pipeline import procesar_trabajo
+
+    procesar_trabajo(reclamar_trabajo("test"))
+    assert cliente.post("/api/plan/generar", headers=h, json={}).status_code == 200
+    cap = cliente.get("/api/plan/activo/capacidad?dias=7", headers=h).json()
+    assert len(cap["dias"]) == 7 and cap["recursos"] and cap["secciones"]
+    lunes = cap["dias"].index("2026-09-21")
+    total_ocupado = sum(c["ocupado"] for r in cap["recursos"] for c in r["celdas"])
+    assert total_ocupado > 0
+    for r in cap["recursos"]:
+        for c in r["celdas"]:
+            assert 0 <= c["ocupado"] <= max(c["disponible"], c["ocupado"])
+        # el domingo no hay turnos
+        assert r["celdas"][cap["dias"].index("2026-09-27")]["disponible"] == 0
+    # una jornada extra el sábado añade capacidad ese día
+    assert all(r["celdas"][lunes + 5]["disponible"] == 0 for r in cap["recursos"])
+    cliente.post("/api/calendario/jornadas-extra", headers=h, json={"fecha": "2026-09-26", "turno": "M"})
+    cap = cliente.get("/api/plan/activo/capacidad?dias=7", headers=h).json()
+    assert any(r["celdas"][lunes + 5]["disponible"] > 0 for r in cap["recursos"])
+
+
+def test_busqueda_global(cliente, fabrica):
+    h = _login(cliente, "planificador")
+    cliente.post("/api/documentos", headers=h, files={"fichero": ("t.pdf", _pdf(fabrica).read_bytes(), "application/pdf")})
+    from hidral_plan.ingesta.cola import reclamar_trabajo
+    from hidral_plan.ingesta.pipeline import procesar_trabajo
+
+    procesar_trabajo(reclamar_trabajo("test"))
+    ofs = cliente.get("/api/ofs?limite=5", headers=h).json()["items"]
+    numero = ofs[0]["numero"]
+    r = cliente.get(f"/api/buscar?q={numero}", headers=h).json()
+    assert r[0] == {"tipo": "OF", "titulo": f"OF {numero}", "sub": r[0]["sub"], "ruta": f"/ofs/{ofs[0]['id']}"}
+    tipos = {x["tipo"] for x in cliente.get("/api/buscar?q=70001", headers=h).json()}
+    assert "Aparato" in tipos
+    assert any(x["tipo"] == "Máquina" for x in cliente.get("/api/buscar?q=LASER", headers=h).json())
+    assert any(x["tipo"] == "Operario" for x in cliente.get("/api/buscar?q=OP01", headers=h).json())
+    assert cliente.get("/api/buscar?q=a", headers=h).json() == []
+
+
+def test_seguimiento_plan_frente_a_real(cliente, fabrica):
+    h = _login(cliente, "planificador")
+    cliente.post("/api/documentos", headers=h, files={"fichero": ("t.pdf", _pdf(fabrica).read_bytes(), "application/pdf")})
+    from hidral_plan.ingesta.cola import reclamar_trabajo
+    from hidral_plan.ingesta.pipeline import procesar_trabajo
+
+    procesar_trabajo(reclamar_trabajo("test"))
+    assert cliente.post("/api/plan/generar", headers=h, json={}).status_code == 200
+    s0 = cliente.get("/api/dashboard/seguimiento", headers=h).json()
+    assert s0["resumen"]["fichajes"] == 0 and s0["en_curso"] == [] and s0["adherencia"]["debidas"] == 0
+    # un operario empieza su primer trabajo: aparece en curso
+    ho = _login(cliente, "op01")
+    t = cliente.get("/api/operario/trabajo", headers=ho).json()
+    assert t["siguiente"], "op01 tiene trabajo en el plan de ejemplo"
+    # su predecesora aún no está terminada: lo autoriza el jefe de equipo (queda registrado)
+    hj = _login(cliente, "jefe")
+    r = cliente.post("/api/operario/iniciar", headers=hj, json={"operacion_id": t["siguiente"]["operacion_id"], "operario_id": t["operario"]["id"], "autorizado_por": "jefe"})
+    assert r.status_code == 200, r.text
+    s1 = cliente.get("/api/dashboard/seguimiento", headers=h).json()
+    assert len(s1["en_curso"]) == 1 and s1["en_curso"][0]["of"] == t["siguiente"]["of"]
+    # y al terminarlo cuenta en las desviaciones (reloj fijo: 0 min reales)
+    fid = cliente.get("/api/operario/trabajo", headers=ho).json()["actual"]["fichaje_id"]
+    assert cliente.post(f"/api/operario/fichajes/{fid}/terminar", headers=ho, json={}).status_code == 200
+    s2 = cliente.get("/api/dashboard/seguimiento", headers=h).json()
+    assert s2["resumen"]["fichajes"] == 1 and s2["resumen"]["desviacion_pct"] == -100.0
+    assert s2["mayores_desviaciones"][0]["of"] == t["siguiente"]["of"] and s2["por_tipo"][0]["fichajes"] == 1
+
+
+def test_centro_de_avisos(cliente, fabrica):
+    """Un aparato que pasa a riesgo ROJO avisa una sola vez al planificador; se pueden marcar todos como leídos."""
+    h = _login(cliente, "planificador")
+    ruta = fabrica / "avisos.pdf"
+    generar_tanda(ruta, OpcionesTanda(aparatos=[ApGen("70001", semana=38), ApGen("70002")]))  # la semana 38 ya pasó
+    cliente.post("/api/documentos", headers=h, files={"fichero": ("t.pdf", ruta.read_bytes(), "application/pdf")})
+    from hidral_plan.ingesta.cola import reclamar_trabajo
+    from hidral_plan.ingesta.pipeline import procesar_trabajo
+
+    procesar_trabajo(reclamar_trabajo("test"))
+    assert cliente.post("/api/plan/generar", headers=h, json={}).status_code == 200
+    avisos = cliente.get("/api/notificaciones?solo_roles=true", headers=h).json()
+    rojos = [a for a in avisos if a["titulo"].startswith("Aparato") and "70001" in a["titulo"]]
+    assert len(rojos) == 1 and rojos[0]["nivel"] == "ALERTA" and rojos[0]["referencia"].startswith("aparato:") and not rojos[0]["leida"]
+    assert all(a["rol"] for a in avisos)  # solo lo dirigido a mandos, no los cambios de carga de cada operario
+    # replanificar no repite el aviso: el aparato ya estaba en rojo
+    assert cliente.post("/api/plan/generar", headers=h, json={}).status_code == 200
+    assert len([a for a in cliente.get("/api/notificaciones?solo_roles=true", headers=h).json() if "70001" in a["titulo"]]) == 1
+    r = cliente.post("/api/notificaciones/leidas?solo_roles=true", headers=h).json()
+    assert r["marcadas"] >= 1
+    assert all(a["leida"] for a in cliente.get("/api/notificaciones?solo_roles=true", headers=h).json())
+
+
+def test_priorizar_tanda_y_aparato(cliente, fabrica):
+    h = _login(cliente, "planificador")
+    cliente.post("/api/documentos", headers=h, files={"fichero": ("t.pdf", _pdf(fabrica).read_bytes(), "application/pdf")})
+    from hidral_plan.ingesta.cola import reclamar_trabajo
+    from hidral_plan.ingesta.pipeline import procesar_trabajo
+
+    procesar_trabajo(reclamar_trabajo("test"))
+    tanda = cliente.get("/api/tandas", headers=h).json()[0]
+    det = cliente.get(f"/api/tandas/{tanda['id']}", headers=h).json()
+    assert det["ofs_urgentes"] == 0 and det["ofs_total"] > 0
+    ap = det["aparatos"][0]
+    r = cliente.post("/api/prioridad", headers=h, json={"aparato_id": ap["id"], "motivo": "cliente lo necesita antes"}).json()
+    assert r["cambiadas"] == ap["ofs"]
+    ofs_ap = cliente.get(f"/api/aparatos/{ap['id']}", headers=h).json()["ofs"]
+    assert ofs_ap and all(o["urgente"] for o in ofs_ap)
+    # toda la tanda: solo cambian las que aún no eran urgentes; y se puede deshacer
+    r = cliente.post("/api/prioridad", headers=h, json={"tanda_id": tanda["id"]}).json()
+    assert r["cambiadas"] == det["ofs_total"] - ap["ofs"]
+    assert cliente.get(f"/api/tandas/{tanda['id']}", headers=h).json()["ofs_urgentes"] == det["ofs_total"]
+    assert cliente.post("/api/prioridad", headers=h, json={"tanda_id": tanda["id"], "urgente": False}).json()["cambiadas"] == det["ofs_total"]
+    assert cliente.post("/api/prioridad", headers=h, json={}).status_code == 400
+    assert cliente.post("/api/prioridad", headers=_login(cliente, "op01"), json={"tanda_id": tanda["id"]}).status_code == 403
+    assert any(a["accion"] == "PRIORIZAR" for a in cliente.get("/api/auditoria", headers=h).json())

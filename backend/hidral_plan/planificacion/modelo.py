@@ -24,6 +24,7 @@ from ..modelos import (
     DependenciaOF,
     Festivo,
     Fichaje,
+    JornadaExtra,
     OFAparato,
     Operacion,
     Operario,
@@ -165,6 +166,8 @@ class Instantanea:
     config: dict
     ops_terminadas_por_aparato: dict[int, float] = field(default_factory=dict)
     ops_totales_por_aparato: dict[int, float] = field(default_factory=dict)
+    # jornadas extra: (fecha, turno, secciones o None = toda la fábrica)
+    extras: list[tuple[date, str, frozenset[str] | None]] = field(default_factory=list)
     _ventanas_cache: dict = field(default_factory=dict, repr=False)
 
     def copia(self) -> Instantanea:
@@ -172,28 +175,34 @@ class Instantanea:
         c._ventanas_cache = {}
         return c
 
+    def dias_extra(self, turno: str, secciones: set[str | None] | None) -> set[date]:
+        """Días de jornada extra de `turno` que afectan a alguna de `secciones` (None: solo las de toda la fábrica)."""
+        return {f for f, t, secs in self.extras if t == turno and (secs is None or (secciones is not None and secs & secciones))}
+
     def ventanas_recurso(self, r: RecursoP) -> Ventanas:
-        clave = ("R", r.id, tuple(r.paradas))
+        clave = ("R", r.id, tuple(r.paradas), tuple(self.extras))
         if clave not in self._ventanas_cache:
             base: list[Intervalo] = []
             for t in r.turnos or list(self.turnos):
                 if t in self.turnos:
-                    base += ventanas_turno(self.turnos[t], self.ahora, self.horizonte, self.festivos)
+                    base += ventanas_turno(self.turnos[t], self.ahora, self.horizonte, self.festivos, self.dias_extra(t, {r.seccion}))
             self._ventanas_cache[clave] = Ventanas(restar(fusionar(base), r.paradas))
         return self._ventanas_cache[clave]
 
     def ventanas_operario(self, o: OperarioP) -> Ventanas:
-        clave = ("O", o.id, tuple(o.ausencias))
+        clave = ("O", o.id, tuple(o.ausencias), tuple(self.extras))
         if clave not in self._ventanas_cache:
-            base = ventanas_turno(self.turnos[o.turno], self.ahora, self.horizonte, self.festivos) if o.turno in self.turnos else []
+            # el operario hace la jornada extra de las secciones de las máquinas en que está cualificado
+            secciones = {r.seccion for r in self.recursos.values() if r.codigo in o.recursos}
+            base = ventanas_turno(self.turnos[o.turno], self.ahora, self.horizonte, self.festivos, self.dias_extra(o.turno, secciones)) if o.turno in self.turnos else []
             self._ventanas_cache[clave] = Ventanas(restar(base, o.ausencias))
         return self._ventanas_cache[clave]
 
     def ventanas_fabrica(self) -> Ventanas:
         if "F" not in self._ventanas_cache:
             base: list[Intervalo] = []
-            for t in self.turnos.values():
-                base += ventanas_turno(t, self.ahora - timedelta(days=1), self.horizonte + timedelta(days=60), self.festivos)
+            for c, t in self.turnos.items():
+                base += ventanas_turno(t, self.ahora - timedelta(days=1), self.horizonte + timedelta(days=60), self.festivos, self.dias_extra(c, None))
             self._ventanas_cache["F"] = Ventanas(fusionar(base))
         return self._ventanas_cache["F"]
 
@@ -229,6 +238,10 @@ def cargar_instantanea(s: Session, ahora: datetime, tanda_ids: list[int] | None 
     horizonte = ahora + timedelta(days=int(cfg["planificacion"].get("horizonte_dias", 21)))
     turnos = {t.codigo: turno_desde_modelo(t) for t in s.scalars(select(Turno).where(Turno.activo.is_(True)))}
     festivos = {f.fecha for f in s.scalars(select(Festivo))}
+    extras = [
+        (j.fecha, j.turno_codigo, frozenset(j.secciones) if j.secciones else None)
+        for j in s.scalars(select(JornadaExtra).where(JornadaExtra.fecha >= ahora.date() - timedelta(days=1), JornadaExtra.fecha <= horizonte.date()).order_by(JornadaExtra.fecha))
+    ]
 
     q_tandas = select(Tanda).where(Tanda.estado == "ACTIVA", Tanda.incluida_en_plan.is_(True))
     if tanda_ids:
@@ -400,4 +413,5 @@ def cargar_instantanea(s: Session, ahora: datetime, tanda_ids: list[int] | None 
         config=cfg,
         ops_terminadas_por_aparato=dict(terminadas_por_aparato),
         ops_totales_por_aparato=dict(totales_por_aparato),
+        extras=extras,
     )

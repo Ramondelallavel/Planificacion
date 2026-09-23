@@ -18,11 +18,13 @@ from ...modelos import (
     LineaOF,
     OFAparato,
     Operacion,
+    Operario,
     OrdenFabricacion,
     ProgramaCNC,
     Recurso,
     Tanda,
 )
+from ...modelos.enums import ESTADOS_OF_CERRADOS
 from ...planificacion import servicio as sv
 from ...servicios.auditoria import auditar
 from ..deps import UsuarioActual, get_sesion, requiere
@@ -107,6 +109,8 @@ def tanda(tanda_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = De
     return {
         "id": t.id, "numero": t.numero, "producto": t.producto, "semana": t.semana_codigo, "estado": t.estado, "riesgo": t.riesgo_nivel,
         "motivos": t.riesgo_motivos, "progreso": t.progreso, "carga_restante_h": t.carga_restante_h, "aparatos": aparatos, "secciones": secciones,
+        "ofs_urgentes": s.scalar(select(func.count(OrdenFabricacion.id)).where(OrdenFabricacion.tanda_id == tanda_id, OrdenFabricacion.urgente.is_(True))),
+        "ofs_total": s.scalar(select(func.count(OrdenFabricacion.id)).where(OrdenFabricacion.tanda_id == tanda_id)),
     }
 
 
@@ -251,6 +255,42 @@ def cambiar_of(of_id: int, datos: CambioOF, s: Session = Depends(get_sesion), u:
     return _of_resumen(o)
 
 
+class Prioridad(BaseModel):
+    tanda_id: int | None = None
+    aparato_id: int | None = None
+    urgente: bool = True
+    motivo: str | None = None
+
+
+@router.post("/prioridad")
+def prioridad(datos: Prioridad, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
+    """Prioriza (o deja de priorizar) de una vez todas las OF abiertas de una tanda o de un aparato.
+
+    Solo marca las OF como urgentes: el plan cambia al replanificar, como con una OF suelta.
+    """
+    if datos.aparato_id:
+        ap = s.get(Aparato, datos.aparato_id)
+        if ap is None:
+            raise HTTPException(404, "Aparato inexistente")
+        consulta = select(OrdenFabricacion).join(OFAparato, OFAparato.of_id == OrdenFabricacion.id).where(OFAparato.aparato_id == ap.id)
+        entidad, ref = "APARATO", ap.referencia
+    elif datos.tanda_id:
+        t = s.get(Tanda, datos.tanda_id)
+        if t is None:
+            raise HTTPException(404, "Tanda inexistente")
+        consulta = select(OrdenFabricacion).where(OrdenFabricacion.tanda_id == t.id)
+        entidad, ref = "TANDA", t.numero
+    else:
+        raise HTTPException(400, "Indica la tanda o el aparato")
+    cambiadas = []
+    for o in s.scalars(consulta.where(OrdenFabricacion.estado.not_in(list(ESTADOS_OF_CERRADOS)))).unique():
+        if bool(o.urgente) != datos.urgente:
+            o.urgente = datos.urgente
+            cambiadas.append(o.numero)
+    auditar(s, u.usuario, "PRIORIZAR" if datos.urgente else "QUITAR_PRIORIDAD", entidad, ref, despues={"urgente": datos.urgente, "ofs": cambiadas}, motivo=datos.motivo)
+    return {"cambiadas": len(cambiadas), "urgente": datos.urgente}
+
+
 class Programa(BaseModel):
     codigo: str
     recurso_codigo: str | None = None
@@ -304,3 +344,42 @@ def bulto(bulto_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = De
     return {"id": b.id, "numero": b.numero, "descripcion": b.descripcion, "componentes": len(b.componentes), "fuentes": b.fuentes}
 
 
+
+
+# ------------------------------------------------------------------ búsqueda global
+@router.get("/buscar")
+def buscar(q: str, limite: int = 30, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+    """Busca en OF, tandas, aparatos, artículos, máquinas y operarios. Devuelve adónde ir en la interfaz."""
+    q = q.strip()
+    if len(q) < 2:
+        return []
+    patron = f"%{q}%"
+    salida: list[dict] = []
+
+    def add(tipo: str, titulo: str, sub: str | None, ruta: str) -> None:
+        if len(salida) < limite:
+            salida.append({"tipo": tipo, "titulo": titulo, "sub": sub, "ruta": ruta})
+
+    for o in s.scalars(select(OrdenFabricacion).where(or_(OrdenFabricacion.numero.like(patron), OrdenFabricacion.grupo_hf.like(patron), OrdenFabricacion.descripcion.like(patron))).order_by(OrdenFabricacion.numero).limit(12)):
+        add("OF", f"OF {o.numero}", " · ".join(x for x in (o.seccion_codigo, o.grupo_hf or o.descripcion, o.estado) if x), f"/ofs/{o.id}")
+    for t in s.scalars(select(Tanda).where(or_(Tanda.numero.like(patron), Tanda.producto.like(patron))).limit(5)):
+        add("Tanda", f"Tanda {t.numero}", t.producto, f"/tandas/{t.id}")
+    for a in s.scalars(select(Aparato).where(or_(Aparato.referencia.like(patron), Aparato.numero_control.like(patron), Aparato.su_referencia.like(patron), Aparato.cliente.like(patron))).limit(6)):
+        add("Aparato", a.referencia, " · ".join(x for x in (a.producto, a.semana_codigo) if x), f"/aparatos/{a.id}")
+    vistos: set[tuple[str, int]] = set()
+    filas = s.execute(
+        select(LineaOF.articulo_codigo, LineaOF.articulo_descripcion, LineaOF.tipo, OrdenFabricacion.id, OrdenFabricacion.numero)
+        .join(OrdenFabricacion, OrdenFabricacion.id == LineaOF.of_id)
+        .where(or_(LineaOF.articulo_codigo.like(patron), LineaOF.articulo_descripcion.like(patron)))
+        .limit(40)
+    )
+    for codigo, descripcion, tipo, of_id, numero in filas:
+        if (codigo, of_id) in vistos:
+            continue
+        vistos.add((codigo, of_id))
+        add("Artículo", f"{codigo or '—'} {descripcion or ''}".strip(), f"{'fabrica' if tipo and tipo.startswith('SALIDA') else 'lo usa'} la OF {numero}", f"/ofs/{of_id}")
+    for r in s.scalars(select(Recurso).where(or_(Recurso.codigo.like(patron), Recurso.nombre.like(patron))).limit(5)):
+        add("Máquina", r.codigo, f"{r.nombre} · {r.seccion_codigo}", f"/gantt?buscar={r.codigo}")
+    for o in s.scalars(select(Operario).where(or_(Operario.nombre.like(patron), Operario.codigo_empleado.like(patron))).limit(5)):
+        add("Operario", o.nombre, f"{o.codigo_empleado} · turno {o.turno_codigo or '—'}", f"/operario?operario={o.id}")
+    return salida

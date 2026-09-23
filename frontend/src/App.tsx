@@ -1,11 +1,15 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, HashRouter, Navigate, NavLink, Route, Routes } from 'react-router-dom'
 import { guardarSesion, onSesionCaducada, puede, sesionGuardada, type Sesion } from './api'
+import Avisos from './componentes/Avisos'
+import Buscador from './componentes/Buscador'
 import PedirCambio from './componentes/PedirCambio'
 import { NAVEGADOR, onMotor } from './motor'
 import Datos from './paginas/Datos'
 import { guardarEnNube } from './plataforma'
 import Aparato from './paginas/Aparato'
+import Asistente from './paginas/Asistente'
+import Capacidad from './paginas/Capacidad'
 import Auditoria from './paginas/Auditoria'
 import Configuracion from './paginas/Configuracion'
 import ControlTower from './paginas/ControlTower'
@@ -17,6 +21,7 @@ import OF from './paginas/OF'
 import Operario from './paginas/Operario'
 import PlanGantt from './paginas/PlanGantt'
 import PlanTurnos from './paginas/PlanTurnos'
+import Seguimiento from './paginas/Seguimiento'
 import Simulacion from './paginas/Simulacion'
 import Tanda from './paginas/Tanda'
 import Tandas from './paginas/Tandas'
@@ -100,6 +105,8 @@ export default function App() {
               HIDRAL
               <small>Planificación y control de fabricación</small>
             </div>
+            {ver && <Buscador />}
+            {ver && <Avisos />}
             <nav>
               {ver && (
                 <>
@@ -108,8 +115,11 @@ export default function App() {
                   <NavLink to="/indicadores">Indicadores</NavLink>
                   <NavLink to="/gantt">Plan · Gantt</NavLink>
                   <NavLink to="/turnos">Plan por turno</NavLink>
+                  <NavLink to="/capacidad">Capacidad</NavLink>
+                  <NavLink to="/seguimiento">Seguimiento</NavLink>
                   <NavLink to="/incidencias">Incidencias</NavLink>
                   <NavLink to="/simulacion">Simulación / OF urgente</NavLink>
+                  {NAVEGADOR && <NavLink to="/asistente">Asistente (Claude)</NavLink>}
                   <div className="seccion-nav">Fabricación</div>
                   <NavLink to="/tandas">Tandas y aparatos</NavLink>
                   <NavLink to="/ofs">Órdenes de fabricación</NavLink>
@@ -146,8 +156,11 @@ export default function App() {
                   <Route path="/indicadores" element={<Dashboard />} />
                   <Route path="/gantt" element={<PlanGantt />} />
                   <Route path="/turnos" element={<PlanTurnos />} />
+                  <Route path="/capacidad" element={<Capacidad />} />
+                  <Route path="/seguimiento" element={<Seguimiento />} />
                   <Route path="/incidencias" element={<Incidencias />} />
                   <Route path="/simulacion" element={<Simulacion />} />
+                  {NAVEGADOR && <Route path="/asistente" element={<Asistente />} />}
                   <Route path="/tandas" element={<Tandas />} />
                   <Route path="/tandas/:id" element={<Tanda />} />
                   <Route path="/aparatos/:id" element={<Aparato />} />

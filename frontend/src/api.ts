@@ -104,6 +104,7 @@ export const api = {
   post: <T>(ruta: string, cuerpo?: unknown) => peticion<T>('POST', ruta, cuerpo ?? {}),
   patch: <T>(ruta: string, cuerpo: unknown) => peticion<T>('PATCH', ruta, cuerpo),
   put: <T>(ruta: string, cuerpo: unknown) => peticion<T>('PUT', ruta, cuerpo),
+  del: <T>(ruta: string) => peticion<T>('DELETE', ruta),
   subir: <T>(ruta: string, fichero: File, campo = 'fichero') => {
     const f = new FormData()
     f.append(campo, fichero)

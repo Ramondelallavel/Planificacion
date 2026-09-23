@@ -10,14 +10,17 @@ Escenario (todos los campos opcionales):
       "falta_material": [{"of_id": 12, "desde": "..." | null}],
       "retrasos": [{"operacion_id": 99, "minutos": 90}],
       "recursos_extra": [{"clonar_recurso_id": 5, "cantidad": 1}],
+      "turnos_extra": [{"fecha": "2026-09-26", "turno": "M", "secciones": ["EH"] | null}],
       "pesos_prioridad": {"holgura": 0.5, ...}
     }
 Nunca escribe en el plan real; el servicio puede guardar el resultado como plan SIMULACION.
+Los escenarios que añaden capacidad (turnos o recursos extra) se evalúan siempre replanificando
+todo el horizonte: en modo incremental nada quedaría afectado y la capacidad no se aprovecharía.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from .analisis import analizar_cuellos, calcular_kpis
 from .modelo import AsigP, Instantanea, RecursoP
@@ -28,6 +31,9 @@ from .riesgo import calcular_riesgos
 
 def _fecha(txt: str | None, defecto: datetime) -> datetime:
     return datetime.fromisoformat(txt) if txt else defecto
+
+
+_DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
 
 
 def aplicar_escenario(inst: Instantanea, esc: dict) -> list[str]:
@@ -59,6 +65,12 @@ def aplicar_escenario(inst: Instantanea, esc: dict) -> list[str]:
     for r in esc.get("retrasos", []):
         aplicar_evento(inst, Evento("RETRASO", "", op_id=r["operacion_id"], minutos_extra=float(r["minutos"])))
         descr.append(f"Operación {r['operacion_id']} +{r['minutos']} min")
+    for j in esc.get("turnos_extra", []):
+        dia = date.fromisoformat(str(j["fecha"])[:10])
+        secciones = frozenset(j["secciones"]) if j.get("secciones") else None
+        inst.extras.append((dia, j["turno"], secciones))
+        donde = ", ".join(sorted(secciones)) if secciones else "toda la fábrica"
+        descr.append(f"Turno extra {j['turno']} el {_DIAS[dia.weekday()]} {dia:%d/%m} en {donde}")
     nuevo_id = max(inst.recursos, default=0) + 100000
     for extra in esc.get("recursos_extra", []):
         base = inst.recursos.get(extra["clonar_recurso_id"])
@@ -109,7 +121,12 @@ def simular(inst_base: Instantanea, plan_base: dict[int, AsigP] | None, esc: dic
     base = _resumen(inst_base, base_res)
     inst = inst_base.copia()
     descr = aplicar_escenario(inst, esc)
-    if esc.get("modo", "completo") == "incremental" and plan_base is not None:
+    # Añadir capacidad (turnos o máquinas extra) no invalida nada del plan: solo se aprovecha
+    # replanificando todo el horizonte, así que esos escenarios se evalúan siempre completos.
+    anade_capacidad = bool(esc.get("turnos_extra") or esc.get("recursos_extra"))
+    if anade_capacidad and esc.get("modo") == "incremental":
+        descr.append("Capacidad añadida: se replanifica todo el horizonte para aprovecharla")
+    if esc.get("modo", "completo") == "incremental" and plan_base is not None and not anade_capacidad:
         # incremental: se congela el plan base y solo se recoloca lo afectado por cada cambio
         plan = dict(plan_base)
         afectadas: set[int] = set()

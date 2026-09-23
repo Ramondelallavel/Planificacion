@@ -2,6 +2,7 @@ import { Link, useParams } from 'react-router-dom'
 import { api, puede } from '../api'
 import { useSesion } from '../App'
 import { Cargando, MensajeError, Riesgo, useDatos } from '../componentes/comunes'
+import Priorizar from '../componentes/Priorizar'
 import { fecha, horas, pct, semana } from '../formato'
 import type { Nivel } from '../tipos'
 
@@ -31,6 +32,8 @@ interface TandaDet {
     su_referencia: string | null
   }[]
   secciones: { seccion: string | null; ofs: number; horas: number }[]
+  ofs_urgentes: number
+  ofs_total: number
 }
 
 export default function Tanda() {
@@ -70,6 +73,7 @@ export default function Tanda() {
             </button>
           </div>
         )}
+        {puede(sesion, 'modificar_plan') && <Priorizar tanda_id={id} urgentes={t.ofs_urgentes} total={t.ofs_total} onCambio={recargar} />}
       </div>
       {t.motivos && t.motivos.length > 0 && (
         <div className="mensaje aviso">

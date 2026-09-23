@@ -33,12 +33,15 @@ def turno_desde_modelo(t) -> TurnoDef:
     return TurnoDef(t.codigo, _hora(t.hora_inicio), _hora(t.hora_fin), frozenset(t.dias_semana or []), pausas)
 
 
-def ventanas_turno(turno: TurnoDef, desde: datetime, hasta: datetime, festivos: set[date] | None = None) -> list[Intervalo]:
+def ventanas_turno(turno: TurnoDef, desde: datetime, hasta: datetime, festivos: set[date] | None = None, extras: set[date] | None = None) -> list[Intervalo]:
+    """Intervalos de trabajo del turno. `extras`: días en que se trabaja ese turno aunque no
+    toque por calendario (una jornada extra prevalece sobre un festivo)."""
     festivos = festivos or set()
+    extras = extras or set()
     salida: list[Intervalo] = []
     dia = desde.date() - timedelta(days=1)
     while datetime.combine(dia, time.min) <= hasta:
-        if dia.weekday() in turno.dias and dia not in festivos:
+        if dia in extras or (dia.weekday() in turno.dias and dia not in festivos):
             ini = datetime.combine(dia, turno.inicio)
             fin = datetime.combine(dia, turno.fin)
             if fin <= ini:

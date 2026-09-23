@@ -1,10 +1,10 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useMemo, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { api, puede } from '../api'
 import { useSesion } from '../App'
 import { Cargando, ExplicacionDecision, MensajeError, Modal, Riesgo, useDatos } from '../componentes/comunes'
-import Gantt, { type Vista, type Zoom } from '../componentes/Gantt'
-import { fecha, isoLocal } from '../formato'
+import Gantt, { type OperarioGantt, type Vista, type Zoom } from '../componentes/Gantt'
+import { fecha, isoLocal, ORDEN_NIVEL } from '../formato'
 import type { Asignacion, Cambio, NoPlanificada, RecursoGantt } from '../tipos'
 import { TablaCambios } from './ControlTower'
 import { aCsv, descargar } from '../plataforma'
@@ -14,8 +14,33 @@ interface DatosGantt {
   ahora: string
   asignaciones: Asignacion[]
   recursos: RecursoGantt[]
-  turnos: { turno: string; inicio: string; fin: string }[]
+  turnos: { turno: string; inicio: string; fin: string; extra?: boolean }[]
   no_planificadas: number
+  dependencias?: [number, number][]
+  limites?: { semana: string; fecha: string }[]
+  operarios?: OperarioGantt[]
+}
+
+/** OF anteriores y posteriores (transitivamente) según el grafo de dependencias. */
+function cadenaDe(ofId: number, deps: [number, number][]) {
+  const pred = new Map<number, number[]>()
+  const suc = new Map<number, number[]>()
+  for (const [o, d] of deps) {
+    suc.set(o, [...(suc.get(o) ?? []), d])
+    pred.set(d, [...(pred.get(d) ?? []), o])
+  }
+  const recorrer = (mapa: Map<number, number[]>) => {
+    const vistos = new Set<number>()
+    const pila = [...(mapa.get(ofId) ?? [])]
+    while (pila.length) {
+      const x = pila.pop()!
+      if (vistos.has(x) || x === ofId) continue
+      vistos.add(x)
+      pila.push(...(mapa.get(x) ?? []))
+    }
+    return vistos
+  }
+  return { antes: recorrer(pred), despues: recorrer(suc) }
 }
 
 interface Operario {
@@ -36,6 +61,30 @@ export default function PlanGantt() {
   const [sel, setSel] = useState<Asignacion | null>(null)
   const [mover, setMover] = useState<{ a: Asignacion; inicio: Date } | null>(null)
   const [verNoPlan, setVerNoPlan] = useState(false)
+  const [params] = useSearchParams()
+  const [filtro, setFiltro] = useState({ tanda: '', aparato: '', riesgo: '', texto: params.get('buscar') ?? '', problemas: false, conCarga: false })
+  const [cadena, setCadena] = useState<Asignacion | null>(null)
+
+  const visibles = useMemo(() => {
+    if (!datos) return []
+    const texto = filtro.texto.trim().toLowerCase()
+    return datos.asignaciones.filter(
+      (a) =>
+        (!filtro.tanda || a.tanda === filtro.tanda) &&
+        (!filtro.aparato || a.aparato === filtro.aparato) &&
+        (!filtro.riesgo || (ORDEN_NIVEL[a.riesgo] ?? 0) >= ORDEN_NIVEL[filtro.riesgo]) &&
+        (!texto || [a.of, a.grupo_hf, a.tipo, a.recurso, a.operario].some((v) => v?.toLowerCase().includes(texto))) &&
+        (!filtro.problemas || a.provisional || a.urgente || a.riesgo === 'ROJO' || a.riesgo === 'NARANJA'),
+    )
+  }, [datos, filtro])
+
+  const infoCadena = useMemo(() => {
+    if (!cadena || !datos) return null
+    const { antes, despues } = cadenaDe(cadena.of_id, datos.dependencias ?? [])
+    const ofs = new Set([cadena.of_id, ...antes, ...despues])
+    return { antes: antes.size, despues: despues.size, ops: new Set(datos.asignaciones.filter((a) => ofs.has(a.of_id)).map((a) => a.operacion_id)) }
+  }, [cadena, datos])
+
   if (error) return <MensajeError error={error} />
   if (!datos) return <Cargando />
   if (!datos.plan_id)
@@ -46,6 +95,9 @@ export default function PlanGantt() {
     )
   const secciones = [...new Set(datos.recursos.map((r) => r.seccion).filter(Boolean))] as string[]
   const recursosVisibles = seccion ? datos.recursos.filter((r) => r.seccion === seccion) : datos.recursos
+  const tandas = [...new Set(datos.asignaciones.map((a) => a.tanda).filter(Boolean))].sort() as string[]
+  const aparatos = [...new Set(datos.asignaciones.filter((a) => !filtro.tanda || a.tanda === filtro.tanda).map((a) => a.aparato).filter(Boolean))].sort() as string[]
+  const filtrando = !!(filtro.tanda || filtro.aparato || filtro.riesgo || filtro.texto || filtro.problemas)
   return (
     <>
       <div className="cabecera">
@@ -62,6 +114,7 @@ export default function PlanGantt() {
         <div className="botones">
           <select value={vista} onChange={(e) => setVista(e.target.value as Vista)}>
             <option value="recurso">Por recurso</option>
+            <option value="operario">Por operario</option>
             <option value="tanda">Por tanda / aparato / OF</option>
           </select>
           <select value={seccion} onChange={(e) => setSeccion(e.target.value)}>
@@ -71,9 +124,9 @@ export default function PlanGantt() {
             ))}
           </select>
           <div className="botones" role="group" aria-label="Zoom">
-            {(['hora', 'turno', 'dia'] as Zoom[]).map((z) => (
+            {(['hora', 'turno', 'dia', 'semana'] as Zoom[]).map((z) => (
               <button key={z} className={zoom === z ? 'primario' : ''} onClick={() => setZoom(z)}>
-                {z === 'hora' ? 'Hora' : z === 'turno' ? 'Turno' : 'Día'}
+                {{ hora: 'Hora', turno: 'Turno', dia: 'Día', semana: 'Semana' }[z]}
               </button>
             ))}
           </div>
@@ -105,20 +158,69 @@ export default function PlanGantt() {
           </button>
         </div>
       </div>
+      <div className="filtros-gantt">
+        <select id="f-tanda" value={filtro.tanda} onChange={(e) => setFiltro({ ...filtro, tanda: e.target.value, aparato: '' })}>
+          <option value="">Todas las tandas</option>
+          {tandas.map((t) => (
+            <option key={t} value={t}>
+              Tanda {t}
+            </option>
+          ))}
+        </select>
+        <select id="f-aparato" value={filtro.aparato} onChange={(e) => setFiltro({ ...filtro, aparato: e.target.value })}>
+          <option value="">Todos los aparatos</option>
+          {aparatos.map((a) => (
+            <option key={a}>{a}</option>
+          ))}
+        </select>
+        <select id="f-riesgo" value={filtro.riesgo} onChange={(e) => setFiltro({ ...filtro, riesgo: e.target.value })}>
+          <option value="">Cualquier riesgo</option>
+          <option value="AMARILLO">Amarillo o peor</option>
+          <option value="NARANJA">Naranja o peor</option>
+          <option value="ROJO">Solo rojo</option>
+        </select>
+        <input id="f-texto" placeholder="Buscar OF, grupo, máquina, operario…" value={filtro.texto} onChange={(e) => setFiltro({ ...filtro, texto: e.target.value })} />
+        <label>
+          <input type="checkbox" checked={filtro.problemas} onChange={(e) => setFiltro({ ...filtro, problemas: e.target.checked })} /> Solo problemas
+        </label>
+        <label>
+          <input type="checkbox" checked={filtro.conCarga} onChange={(e) => setFiltro({ ...filtro, conCarga: e.target.checked })} /> Solo filas con trabajo
+        </label>
+        {filtrando && (
+          <span className="pequeno tenue">
+            {visibles.length} de {datos.asignaciones.length} operaciones{' '}
+            <button onClick={() => setFiltro({ tanda: '', aparato: '', riesgo: '', texto: '', problemas: false, conCarga: filtro.conCarga })}>Quitar filtros</button>
+          </span>
+        )}
+      </div>
+      {cadena && infoCadena && (
+        <div className="mensaje aviso cadena">
+          Cadena de la <strong>OF {cadena.of}</strong>: {infoCadena.antes} OF anteriores y {infoCadena.despues} posteriores ({infoCadena.ops.size} operaciones resaltadas).{' '}
+          <button onClick={() => setCadena(null)}>Quitar resaltado</button>
+        </div>
+      )}
       <Gantt
-        asignaciones={datos.asignaciones}
+        asignaciones={visibles}
         recursos={recursosVisibles}
+        operarios={datos.operarios}
         turnos={datos.turnos}
+        limites={datos.limites}
         ahora={datos.ahora}
         zoom={zoom}
         vista={vista}
         seleccion={sel?.operacion_id ?? null}
+        resaltadas={infoCadena?.ops ?? null}
+        soloConCarga={filtro.conCarga || filtrando}
         onSeleccionar={setSel}
         onMover={puede(sesion, 'modificar_plan') ? (a, inicio) => setMover({ a, inicio }) : undefined}
       />
       {sel && (
         <DetalleAsignacion
           a={sel}
+          onVerCadena={() => {
+            setCadena(sel)
+            setSel(null)
+          }}
           recursos={datos.recursos}
           puedeModificar={puede(sesion, 'modificar_plan')}
           onCerrar={() => setSel(null)}
@@ -233,7 +335,21 @@ function ConfirmarMovimiento({ a, inicio, onCerrar, onHecho }: { a: Asignacion; 
   )
 }
 
-function DetalleAsignacion({ a, recursos, puedeModificar, onCerrar, onCambio }: { a: Asignacion; recursos: RecursoGantt[]; puedeModificar: boolean; onCerrar: () => void; onCambio: () => void }) {
+function DetalleAsignacion({
+  a,
+  recursos,
+  puedeModificar,
+  onCerrar,
+  onCambio,
+  onVerCadena,
+}: {
+  a: Asignacion
+  recursos: RecursoGantt[]
+  puedeModificar: boolean
+  onCerrar: () => void
+  onCambio: () => void
+  onVerCadena: () => void
+}) {
   const { datos } = useDatos(() => api.get<Asignacion>(`/plan/asignaciones/${a.operacion_id}`), [a.operacion_id])
   const operarios = useDatos(() => api.get<Operario[]>('/operarios'), [])
   const [recurso, setRecurso] = useState<number | ''>(a.recurso_id ?? '')
@@ -246,7 +362,7 @@ function DetalleAsignacion({ a, recursos, puedeModificar, onCerrar, onCambio }: 
     <Modal titulo={`OF ${a.of} · ${a.tipo}`} onCerrar={onCerrar}>
       <p>
         {fecha(a.inicio)} → {fecha(a.fin)} ({a.minutos} min) en <strong>{a.recurso}</strong> {a.operario && <>· {a.operario}</>} · tanda {a.tanda} · {a.aparato} · <Riesgo nivel={a.riesgo} />{' '}
-        <Link to={`/ofs/${a.of_id}`}>ver OF</Link>
+        <Link to={`/ofs/${a.of_id}`}>ver OF</Link> · <a style={{ cursor: 'pointer' }} onClick={onVerCadena}>ver su cadena en el Gantt</a>
       </p>
       {datos ? <ExplicacionDecision e={datos.explicacion} /> : <Cargando />}
       {puedeModificar && (

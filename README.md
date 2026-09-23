@@ -32,6 +32,29 @@ Principios que el código respeta en todo momento:
 | `frontend` | Interfaz web (React + TypeScript): Control Tower, Gantt, operario, simulación… |
 | `docs` | [Arquitectura](docs/ARQUITECTURA.md) · [Formato del PDF de tanda](docs/FORMATO_PDF_TANDA.md) · [Modelo de datos](docs/MODELO_DATOS.md) · [Casos de prueba](docs/CASOS_PRUEBA.md) |
 
+## Qué se puede hacer
+
+| Pantalla | Para qué |
+|---|---|
+| **Control Tower** | Qué pasa ahora: tandas y aparatos en riesgo con sus motivos, qué hacer en las próximas 2 h, OF retrasadas, máquinas paradas, personal y acciones recomendadas |
+| **Indicadores** | KPIs del plan (cumplimiento de semana, retraso, setups, utilización, WIP) e histórico |
+| **Plan · Gantt** | Por máquina, por tanda/OF o por operario; zoom hora/turno/día/semana; turnos y jornadas extra sombreados, límites de semana de fabricación; filtros por tanda, aparato, riesgo y texto; resaltar la cadena de dependencias de una OF; arrastrar para mover (validado por el motor de restricciones); exportar a CSV |
+| **Plan por turno** | Lo que toca a cada máquina y operario turno a turno |
+| **Capacidad** | Mapa de calor ocupación/capacidad por máquina y día (turnos, festivos, jornadas extra, paradas) y las máquinas más cargadas; clic en una celda para ver qué hay planificado |
+| **Seguimiento** | Plan frente a real: adherencia, trabajos en curso y si exceden su tiempo, pendientes que ya debían estar, desviación real/previsto por sección y operación (CSV) |
+| **Incidencias** | Averías, faltas de material, calidad…; replanifican solo la zona afectada |
+| **Simulación** | «¿Qué pasa si…?» (averías, falta de personal, turnos extra, máquinas extra, adelantar OF) sobre una copia; «Aplicar y replanificar» hace reales las decisiones (turnos extra, urgencias, pesos); OF urgente con aceptación; **comparador** de simulaciones guardadas frente al plan actual |
+| **Asistente (Claude)** | Solo en la edición publicada en claude.ai: preguntas en lenguaje natural que Claude responde consultando los datos de la aplicación y simulando sobre copias; nunca cambia el plan |
+| **Tandas, aparatos y OF** | Estructura completa con trazabilidad a la página del PDF; priorizar de una vez todas las OF de una tanda o de un aparato |
+| **Importar documentos** | Carga de tandas en PDF procesadas por bloques, con progreso e incidencias de datos |
+| **Pantalla de operario** | Mi trabajo, iniciar/pausar/terminar, avisos de cambios de plan, incidencias |
+| **Configuración** | Máquinas, secciones, operarios y cualificaciones, turnos, **calendario** (festivos y jornadas extra por sección), tiempos estándar y aprendizaje, pesos de prioridad |
+| **Auditoría** | Quién cambió qué, cuándo, antes/después y por qué |
+
+En toda la aplicación: búsqueda global (Ctrl+K) de OF, tandas, aparatos, artículos, máquinas y
+operarios, y centro de **avisos** para los mandos (incidencias de planta, aparatos que pasan a
+riesgo rojo).
+
 ## Aviso: datos de fábrica de ejemplo
 
 El PDF de tanda no contiene máquinas, turnos, operarios ni tiempos de operación. Para poder
@@ -71,13 +94,13 @@ exactamente el del servidor; `backend/hidral_plan/navegador.py` solo adapta el e
 hilos, procesamiento de PDF bloque a bloque, copia y restauración de la base).
 
 ```bash
-python herramientas/empaquetar_navegador.py        # genera frontend/dist-navegador (≈36 MB)
+python herramientas/empaquetar_navegador.py        # genera frontend/dist-navegador (≈44 MB)
 cd frontend/dist-navegador && python -m http.server # y abrir http://localhost:8000
 ```
 
 Es la edición que se publica como página en claude.ai: allí añade «Pedir un cambio» (envía a
-Claude un comentario sobre la pantalla actual), copias automáticas en la nube de la página y
-descargas. Es monousuario por navegador: para un equipo que comparte datos, la edición con
+Claude un comentario sobre la pantalla actual), el **Asistente** (preguntas a Claude sobre los
+datos, con la cuenta de quien pregunta), copias automáticas en la nube de la página y descargas. Es monousuario por navegador: para un equipo que comparte datos, la edición con
 servidor (Docker) es la adecuada. Limitaciones: sin OCR (tesseract no existe en WebAssembly) y
 pydantic en versión 2.14 beta, la primera con rueda WebAssembly publicada.
 
@@ -141,8 +164,11 @@ Los tests con el PDF real (`tests/test_pdf_real.py`) se omiten si el fichero no 
   otro formato no se interpreta: queda como `PAGINA_NO_CLASIFICADA` con su texto para revisión.
 - **Integraciones**: ORTEMS, MRP y Teamcenter se importan desde exportaciones CSV. Un conector
   directo (API o base de datos) se añade implementando la misma interfaz de adaptador.
-- **Sin inteligencia artificial en el motor**: todo el procesamiento es determinista. La edición con
-  servidor no envía datos a servicios externos; la edición publicada en claude.ai guarda copias de
-  la base en la nube de la página (privada) y envía a Claude los comentarios de «Pedir un cambio».
+- **Sin inteligencia artificial en el motor**: ingesta, planificación, riesgo y replanificación son
+  deterministas. La edición con servidor no envía datos a servicios externos. La edición publicada
+  en claude.ai guarda copias de la base en la nube de la página (privada), envía a Claude los
+  comentarios de «Pedir un cambio» y, solo cuando alguien usa el Asistente, los datos que Claude
+  consulta para responder (resúmenes del plan, OF, capacidad, seguimiento). El Asistente no
+  escribe en el plan: como mucho guarda simulaciones, que no lo modifican.
 - **Esquema de base de datos**: se crea al arrancar (`create_all`). No hay migraciones
   versionadas (Alembic); un cambio de esquema en una instalación con datos requiere migración manual.

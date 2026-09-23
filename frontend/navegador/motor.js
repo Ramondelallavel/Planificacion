@@ -34,6 +34,20 @@ async function descargar(ruta) {
   return new Uint8Array(await r.arrayBuffer())
 }
 
+// Los archivos binarios se publican como texto base64 (.txt): la página solo sirve tipos web estándar.
+function deBase64(texto) {
+  if (Uint8Array.fromBase64) return Uint8Array.fromBase64(texto)
+  const s = atob(texto)
+  const b = new Uint8Array(s.length)
+  for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i)
+  return b
+}
+async function descargarBase64(ruta) {
+  const r = await fetch(url(ruta))
+  if (!r.ok) throw new Error(`No se pudo descargar ${ruta} (HTTP ${r.status})`)
+  return deBase64((await r.text()).trim())
+}
+
 function unir(partes) {
   if (partes.length === 1) return partes[0]
   const total = partes.reduce((n, p) => n + p.length, 0)
@@ -73,13 +87,16 @@ function existe(ruta) {
 
 async function arrancar() {
   avisar({ tipo: 'carga', fase: 'Cargando Python (WebAssembly)', pct: 3 })
-  py = await loadPyodide({ indexURL: url('./pyodide/').href, stdout: () => {}, stderr: (t) => console.warn('[python]', t) })
   manifiesto = await (await fetch(url('./paquetes.json'))).json()
+  const biblioteca = unir(await Promise.all(manifiesto.biblioteca.partes.map(descargarBase64)))
+  const stdLibURL = URL.createObjectURL(new Blob([biblioteca], { type: 'application/zip' }))
+  py = await loadPyodide({ indexURL: url('./pyodide/').href, stdLibURL, stdout: () => {}, stderr: (t) => console.warn('[python]', t) })
+  URL.revokeObjectURL(stdLibURL)
   // descargas en paralelo, instalación en orden
   let descargados = 0
   const total = manifiesto.paquetes.reduce((n, p) => n + p.bytes, 0)
   const descargas = manifiesto.paquetes.map((p) =>
-    Promise.all(p.partes.map(descargar)).then((partes) => {
+    Promise.all(p.partes.map(descargarBase64)).then((partes) => {
       descargados += p.bytes
       avisar({ tipo: 'carga', fase: `Descargando componentes (${Math.round(descargados / 1048576)} de ${Math.round(total / 1048576)} MB)`, pct: 5 + Math.round((70 * descargados) / total) })
       return unir(partes)

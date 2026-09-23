@@ -4,8 +4,9 @@
 
 ```
                  ┌──────────────────────── Interfaz web (React) ────────────────────────┐
-                 │ Control Tower · Gantt · Plan por turno · Incidencias · Simulación     │
-                 │ Tandas/Aparatos/OF · Importación · Configuración · Auditoría · Operario│
+                 │ Control Tower · Gantt · Plan por turno · Capacidad · Seguimiento      │
+                 │ Incidencias · Simulación · Tandas/Aparatos/OF · Importación           │
+                 │ Configuración · Auditoría · Operario · Avisos · Búsqueda (Ctrl+K)     │
                  └───────────────────────────────┬──────────────────────────────────────┘
                                                  │ REST /api (token firmado, permisos por rol)
 ┌────────────────────────────────────────────────▼─────────────────────────────────────────────┐
@@ -145,8 +146,26 @@ la decisión queda auditada.
 
 ### Simulación what-if (`simulacion.py`)
 Escenarios combinables (averías, ausencias, falta de operarios por sección, adelantar OF, falta de
-material, retrasos, recursos extra, otros pesos de prioridad) sobre una copia. Nunca escribe en el
-plan oficial; puede guardarse como plan `SIMULACION` para compararlo.
+material, retrasos, recursos extra, turnos extra, otros pesos de prioridad) sobre una copia. Nunca
+escribe en el plan oficial; puede guardarse como plan `SIMULACION` para compararlo (el comparador de
+la interfaz pone varias junto al plan activo). Los escenarios que añaden capacidad se evalúan
+siempre replanificando todo el horizonte: en modo incremental nada quedaría afectado y la capacidad
+no se aprovecharía.
+
+`servicio.aplicar_escenario` hace reales **las decisiones** de un escenario (jornadas extra, OF
+urgentes, pesos de prioridad) y regenera el plan; los **supuestos** (averías, ausencias, retrasos,
+falta de material) no se aplican: si ocurren, se registran como incidencia.
+
+### Calendario (`calendario.py`, `modelo.py`)
+Las ventanas de trabajo salen de los turnos, menos los **festivos**, más las **jornadas extra**
+(`JornadaExtra`: fecha, turno y, opcionalmente, secciones). Una jornada extra prevalece sobre un
+festivo. Si se limita a unas secciones, abre sus máquinas y a los operarios cualificados en ellas;
+si no, abre toda la fábrica. El Gantt sombrea esos turnos y el mapa de capacidad los cuenta.
+
+### Prioridad manual
+Además de una OF suelta, se pueden marcar urgentes de una vez todas las OF abiertas de una tanda o
+de un aparato (`POST /api/prioridad`, auditado). Como con cualquier urgencia, el plan cambia al
+replanificar.
 
 ### Cambios manuales (`servicio.py`)
 Mover o reasignar una operación pasa por `restricciones.validar_asignacion`: si viola una
@@ -196,11 +215,27 @@ Los adaptadores actuales leen exportaciones CSV (`AdaptadorCSV`, con mapeo de co
   fue automática.
 - **Parámetros versionados**: cada cambio de `ParametroConfig` incrementa su versión y se audita.
 
-## 7. Decisiones de diseño
+## 7. Edición navegador y asistente
+
+`herramientas/empaquetar_navegador.py` empaqueta el mismo backend para ejecutarse en el navegador
+sobre Pyodide (WebAssembly) en un Web Worker: la interfaz habla con él como con la API (`motor.ts`
+→ `navegador.py`, sin servidor HTTP), la base SQLite vive en IndexedDB y los PDF se procesan bloque
+a bloque para no bloquear la interfaz. Publicada como página de claude.ai, usa las capacidades de
+la plataforma: comentarios a Claude («Pedir un cambio»), copias de la base en la nube de la página,
+descargas y el **Asistente**.
+
+El Asistente (`paginas/Asistente.tsx`) envía la pregunta a Claude junto con unas instrucciones fijas
+y le ofrece herramientas que son llamadas a la propia API: estado de la fábrica, búsqueda, detalle
+de OF, capacidad, seguimiento, máquinas y calendario y, si el usuario tiene permiso de simular,
+`simular` (escenario what-if guardado como simulación). Ninguna herramienta escribe en el plan
+oficial. Si la vista no admite herramientas, se envía con la pregunta un resumen del estado actual.
+
+## 8. Decisiones de diseño
 
 | Decisión | Motivo |
 |---|---|
 | Procesamiento determinista, sin IA | Los datos de fabricación no admiten suposiciones; toda regla es trazable y reproducible |
+| Asistente de IA fuera del motor, solo consulta | Ayuda a preguntar y a probar escenarios sin que el plan dependa de un modelo; las decisiones siguen en las pantallas, auditadas |
 | Cola en base de datos (no broker externo) | Un componente menos que operar; `SKIP LOCKED` permite varios trabajadores |
 | Motor en memoria sobre instantánea | Simulaciones y replanificación sobre copias baratas; el plan oficial solo cambia al persistir |
 | SGS con backfilling en lugar de solver MIP | Tiempos de respuesta de segundos con cientos de OF, resultado explicable paso a paso |

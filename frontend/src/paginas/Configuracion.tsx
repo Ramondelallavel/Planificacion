@@ -76,6 +76,7 @@ const PESTANAS: [string, string][] = [
   ['recursos', 'Recursos / máquinas'],
   ['operarios', 'Operarios y cualificaciones'],
   ['turnos', 'Turnos'],
+  ['calendario', 'Calendario laboral'],
   ['secciones', 'Secciones'],
   ['tiempos', 'Tiempos estándar'],
   ['parametros', 'Parámetros de planificación'],
@@ -110,6 +111,7 @@ export default function Configuracion() {
       {pestana === 'recursos' && <Recursos />}
       {pestana === 'operarios' && <Operarios />}
       {pestana === 'turnos' && <Turnos />}
+      {pestana === 'calendario' && <Calendario />}
       {pestana === 'secciones' && <Secciones />}
       {pestana === 'tiempos' && <Tiempos />}
       {pestana === 'parametros' && <ParametrosPlan />}
@@ -619,6 +621,181 @@ function EditarTurno({ t, onCerrar, onHecho }: { t: Turno; onCerrar: () => void;
         <button onClick={onCerrar}>Cancelar</button>
       </div>
     </Modal>
+  )
+}
+
+// ------------------------------------------------------------------ calendario laboral
+interface DatosCalendario {
+  festivos: { fecha: string; descripcion: string | null }[]
+  jornadas_extra: { id: number; fecha: string; turno: string; secciones: string[] | null; motivo: string | null; creado_por: string | null }[]
+}
+
+const diaLargo = (iso: string) => new Date(iso + 'T12:00:00').toLocaleDateString('es-ES', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' })
+
+function Calendario() {
+  const { sesion } = useSesion()
+  const editable = puede(sesion, 'recursos')
+  const { datos, error, recargar } = useDatos(() => api.get<DatosCalendario>('/calendario'), [])
+  const turnos = useDatos(() => api.get<Turno[]>('/turnos'), [])
+  const secciones = useDatos(() => api.get<Seccion[]>('/secciones'), [])
+  const [festivo, setFestivo] = useState({ fecha: '', descripcion: '' })
+  const [extra, setExtra] = useState({ fecha: '', turno: '', secciones: [] as string[], motivo: '' })
+  const [msg, setMsg] = useState<string | null>(null)
+  const [err, setErr] = useState<unknown>(null)
+  const hacer = async (f: () => Promise<{ aviso?: string } | unknown>) => {
+    setErr(null)
+    setMsg(null)
+    try {
+      const r = (await f()) as { aviso?: string } | undefined
+      if (r?.aviso) setMsg(r.aviso)
+      recargar()
+    } catch (e) {
+      setErr(e)
+    }
+  }
+  const turnoPorDefecto = turnos.datos?.find((t) => t.activo)?.codigo ?? ''
+  return (
+    <>
+      <p className="pequeno tenue">
+        El planificador trabaja con los turnos y días de cada turno. Aquí se añaden las excepciones: <strong>festivos</strong> (no se trabaja) y <strong>jornadas extra</strong> (se trabaja un
+        turno fuera del calendario habitual, en toda la fábrica o solo en algunas secciones; lo hacen los operarios de ese turno que trabajan en esas secciones). Para ver antes su efecto,
+        simúlalo en <em>Simulación → ¿Y si hago un turno extra…?</em>
+      </p>
+      {msg && <div className="mensaje ok">{msg}</div>}
+      <MensajeError error={error ?? err} />
+      <div className="rejilla dos">
+        <section className="panel">
+          <h2>Jornadas extra</h2>
+          {!datos ? (
+            <Cargando />
+          ) : datos.jornadas_extra.length === 0 ? (
+            <p className="tenue">No hay jornadas extra programadas.</p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Día</th>
+                  <th>Turno</th>
+                  <th>Dónde</th>
+                  <th>Motivo</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {datos.jornadas_extra.map((j) => (
+                  <tr key={j.id}>
+                    <td>{diaLargo(j.fecha)}</td>
+                    <td>{turnos.datos?.find((t) => t.codigo === j.turno)?.nombre ?? j.turno}</td>
+                    <td>{j.secciones?.join(', ') ?? 'Toda la fábrica'}</td>
+                    <td className="pequeno">
+                      {j.motivo ?? '—'}
+                      {j.creado_por && <div className="tenue">por {j.creado_por}</div>}
+                    </td>
+                    <td>{editable && <button onClick={() => hacer(() => api.del(`/calendario/jornadas-extra/${j.id}`))}>Quitar</button>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {editable && (
+            <div style={{ marginTop: 12 }}>
+              <div className="formulario">
+                <label className="campo">
+                  Día
+                  <input id="extra-dia" type="date" value={extra.fecha} onChange={(e) => setExtra({ ...extra, fecha: e.target.value })} />
+                </label>
+                <label className="campo">
+                  Turno
+                  <select id="extra-turno-cal" value={extra.turno || turnoPorDefecto} onChange={(e) => setExtra({ ...extra, turno: e.target.value })}>
+                    {(turnos.datos ?? [])
+                      .filter((t) => t.activo)
+                      .map((t) => (
+                        <option key={t.codigo} value={t.codigo}>
+                          {t.nombre} ({t.hora_inicio}–{t.hora_fin})
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label className="campo">
+                  Motivo
+                  <input id="extra-motivo" value={extra.motivo} onChange={(e) => setExtra({ ...extra, motivo: e.target.value })} placeholder="Recuperar la semana 40" />
+                </label>
+              </div>
+              <fieldset className="secciones-extra">
+                <legend className="pequeno">Secciones (ninguna marcada = toda la fábrica)</legend>
+                {(secciones.datos ?? []).map((x) => (
+                  <label key={x.codigo}>
+                    <input
+                      type="checkbox"
+                      checked={extra.secciones.includes(x.codigo)}
+                      onChange={(e) => setExtra({ ...extra, secciones: e.target.checked ? [...extra.secciones, x.codigo] : extra.secciones.filter((c) => c !== x.codigo) })}
+                    />{' '}
+                    {x.codigo}
+                  </label>
+                ))}
+              </fieldset>
+              <button
+                className="primario"
+                disabled={!extra.fecha}
+                onClick={() =>
+                  hacer(async () => {
+                    const r = await api.post('/calendario/jornadas-extra', {
+                      fecha: extra.fecha,
+                      turno: extra.turno || turnoPorDefecto,
+                      secciones: extra.secciones.length ? extra.secciones : null,
+                      motivo: extra.motivo || null,
+                    })
+                    setExtra({ fecha: '', turno: '', secciones: [], motivo: '' })
+                    return r
+                  })
+                }
+              >
+                Añadir jornada extra
+              </button>
+            </div>
+          )}
+        </section>
+        <section className="panel">
+          <h2>Festivos</h2>
+          {!datos ? (
+            <Cargando />
+          ) : datos.festivos.length === 0 ? (
+            <p className="tenue">No hay festivos a partir de este mes.</p>
+          ) : (
+            <table>
+              <tbody>
+                {datos.festivos.map((f) => (
+                  <tr key={f.fecha}>
+                    <td>{diaLargo(f.fecha)}</td>
+                    <td>{f.descripcion ?? '—'}</td>
+                    <td>{editable && <button onClick={() => hacer(() => api.del(`/calendario/festivos/${f.fecha}`))}>Quitar</button>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {editable && (
+            <div className="botones" style={{ marginTop: 12 }}>
+              <input id="festivo-fecha" type="date" value={festivo.fecha} onChange={(e) => setFestivo({ ...festivo, fecha: e.target.value })} />
+              <input id="festivo-descripcion" placeholder="Descripción" value={festivo.descripcion} onChange={(e) => setFestivo({ ...festivo, descripcion: e.target.value })} />
+              <button
+                className="primario"
+                disabled={!festivo.fecha}
+                onClick={() =>
+                  hacer(async () => {
+                    const r = await api.post('/calendario/festivos', { fecha: festivo.fecha, descripcion: festivo.descripcion || null })
+                    setFestivo({ fecha: '', descripcion: '' })
+                    return r
+                  })
+                }
+              >
+                Añadir festivo
+              </button>
+            </div>
+          )}
+        </section>
+      </div>
+    </>
   )
 }
 
