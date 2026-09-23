@@ -1,0 +1,153 @@
+# =====================================================================================
+#  CONFIGURACIÓN DE FÁBRICA — EJEMPLO PARA DEMOSTRACIÓN
+# =====================================================================================
+#  ¡ATENCIÓN! Los recursos, operarios y TIEMPOS ESTÁNDAR de este fichero son valores
+#  FICTICIOS para poder demostrar el planificador con el PDF de la tanda 2210.
+#  Todo lo que se carga desde aquí queda marcado como "EJEMPLO" en la base de datos y en
+#  la interfaz. Sustituir por los datos reales de HIDRAL (o importarlos de MRP/ORTEMS)
+#  antes de usar el sistema en producción.
+#
+#  Lo que SÍ procede del PDF real:
+#    - códigos de sección (SC000003-MF, SC000058-LCH, ...)
+#    - máquinas citadas en los títulos de programa de COR (LASERTUB, FICEP, GEKA, SABI)
+#    - que LCH necesita programación (el PDF no trae programa para sus OF) y COR sí la trae
+#  Los nombres de sección se dejan vacíos (DATO NO DISPONIBLE) salvo que la fábrica los indique.
+# =====================================================================================
+
+secciones:
+  - {codigo: MF,      codigo_completo: SC000003-MF}
+  - {codigo: CIL,     codigo_completo: SC000004-CIL}
+  - {codigo: HID,     codigo_completo: SC000005-HID}
+  - {codigo: ELC,     codigo_completo: SC000006-ELC}
+  - {codigo: ELA,     codigo_completo: SC000012-ELA}
+  - {codigo: CAB,     codigo_completo: SC000010-CAB}
+  - {codigo: TPPARSI, codigo_completo: SC000024-TPPARSI, flujo: PINTURA}
+  - {codigo: TPPINO,  codigo_completo: SC000025-TPPINO,  flujo: PINTURA}
+  - {codigo: MOVPINO, codigo_completo: SC000027-MOVPINO}
+  - {codigo: COR,     codigo_completo: SC000056-COR, flujo: LASERTUB, requiere_programacion: true}
+  - {codigo: LCH,     codigo_completo: SC000058-LCH, flujo: LCH, requiere_programacion: true}
+  - {codigo: EH,      codigo_completo: SC000001-EH}
+  - {codigo: BAT,     codigo_completo: SC000011-BAT}
+  - {codigo: FAPI,    codigo_completo: SC000051-FAPI}
+  # PLPINO aparece citada en columnas Sección/Orden pero sin hojas: no se configura a propósito
+  # para demostrar el aviso "operación sin recurso".
+
+turnos:
+  - {codigo: M, nombre: Mañana, hora_inicio: "07:00", hora_fin: "15:00", dias_semana: [0, 1, 2, 3, 4], pausas: [{inicio: "10:00", fin: "10:20"}]}
+  - {codigo: T, nombre: Tarde,  hora_inicio: "15:00", hora_fin: "23:00", dias_semana: [0, 1, 2, 3, 4], pausas: [{inicio: "19:00", fin: "19:20"}]}
+
+recursos:
+  # ---- Montaje final / embalaje
+  - {codigo: MF-P1, nombre: Puesto MF 1, tipo: PUESTO, seccion: MF, operaciones: [MONTAJE, EMBALAJE, PREPARACION, GENERICA], turnos: [M, T]}
+  - {codigo: MF-P2, nombre: Puesto MF 2, tipo: PUESTO, seccion: MF, operaciones: [MONTAJE, EMBALAJE, PREPARACION, GENERICA], turnos: [M, T]}
+  - {codigo: MF-P3, nombre: Puesto MF 3 (embalaje), tipo: PUESTO, seccion: MF, operaciones: [EMBALAJE, PREPARACION], turnos: [M]}
+  # ---- Cilindros
+  - {codigo: CIL-SIERRA, nombre: Sierra cilindros, tipo: MAQUINA, seccion: CIL, operaciones: [CORTE], turnos: [M]}
+  - {codigo: CIL-SOLD, nombre: Soldadura cilindros, tipo: PUESTO, seccion: CIL, operaciones: [SOLDADURA], turnos: [M, T]}
+  - {codigo: CIL-MONT, nombre: Montaje y prueba cilindros, tipo: PUESTO, seccion: CIL, operaciones: [MONTAJE, PRUEBA], turnos: [M, T]}
+  - {codigo: CIL-MEC, nombre: Mecanizado/rectificado cilindros, tipo: MAQUINA, seccion: CIL, operaciones: [MECANIZADO, RECTIFICADO], turnos: [M]}
+  # ---- Hidráulica
+  - {codigo: HID-P1, nombre: Puesto hidráulica, tipo: PUESTO, seccion: HID, operaciones: [MONTAJE, PRUEBA, LAVADO, EMBALAJE, CORTE, GENERICA], turnos: [M]}
+  # ---- Eléctrico
+  - {codigo: ELC-P1, nombre: Puesto cuadros, tipo: PUESTO, seccion: ELC, operaciones: [MONTAJE_ELECTRICO, PRUEBA, EMBALAJE, GENERICA], turnos: [M]}
+  - {codigo: ELA-P1, nombre: Puesto auxiliar eléctrico 1, tipo: PUESTO, seccion: ELA, operaciones: [CABLEADO, MONTAJE_ELECTRICO, MONTAJE, EMBALAJE, PREPARACION, SOLDADURA, GENERICA], turnos: [M, T]}
+  - {codigo: ELA-P2, nombre: Puesto auxiliar eléctrico 2, tipo: PUESTO, seccion: ELA, operaciones: [CABLEADO, MONTAJE_ELECTRICO, MONTAJE, PREPARACION], turnos: [M]}
+  - {codigo: ELA-PRUEBA, nombre: Banco de pruebas eléctricas, tipo: PUESTO, seccion: ELA, operaciones: [PRUEBA], turnos: [M]}
+  # ---- Cabinas / puertas
+  - {codigo: CAB-SOLD, nombre: Soldadura puertas, tipo: PUESTO, seccion: CAB, operaciones: [SOLDADURA], turnos: [M, T]}
+  - {codigo: CAB-MONT, nombre: Montaje-embalaje puertas, tipo: PUESTO, seccion: CAB, operaciones: [MONTAJE, EMBALAJE, GENERICA], turnos: [M]}
+  # ---- Pintura
+  - {codigo: PINT-PINO, nombre: Línea pintura polvo Pino, tipo: MAQUINA, seccion: TPPINO, operaciones: [PINTURA], turnos: [M, T]}
+  - {codigo: PINT-PARSI, nombre: Línea pintura polvo Parsi, tipo: MAQUINA, seccion: TPPARSI, operaciones: [PINTURA], turnos: [M]}
+  - {codigo: MOVPINO-P1, nombre: Puesto MOVPINO, tipo: PUESTO, seccion: MOVPINO, operaciones: [EMBALAJE, GENERICA], turnos: [M]}
+  # ---- Corte (máquinas citadas en los programas del PDF)
+  - {codigo: LASERTUB, nombre: LaserTub (corte-taladro tubo), tipo: MAQUINA, seccion: COR, alias: [LASERTUB], operaciones: [CORTE_TALADRO, CORTE], turnos: [M, T]}
+  - {codigo: FICEP, nombre: FICEP corte-taladro perfiles, tipo: MAQUINA, seccion: COR, alias: [FICEP], operaciones: [CORTE_TALADRO, CORTE], turnos: [M]}
+  - {codigo: GEKA, nombre: GEKA punzonado, tipo: MAQUINA, seccion: COR, alias: [GEKA], operaciones: [PUNZONADO, CORTE], turnos: [M]}
+  - {codigo: SABI, nombre: Sierra SABI, tipo: MAQUINA, seccion: COR, alias: [SABI], operaciones: [CORTE], turnos: [M]}
+  - {codigo: COR-PROG, nombre: Programación CNC corte, tipo: PROGRAMACION, seccion: COR, operaciones: [PROGRAMACION], turnos: [M], requiere_operario: true}
+  # ---- Láser chapa
+  - {codigo: LCH-LASER, nombre: Láser chapa, tipo: MAQUINA, seccion: LCH, operaciones: [CORTE_LASER], turnos: [M, T], restricciones: {espesor_max_mm: 12}}
+  - {codigo: LCH-PLEG, nombre: Plegadora, tipo: MAQUINA, seccion: LCH, operaciones: [PLEGADO], turnos: [M, T]}
+  - {codigo: LCH-PROG, nombre: Programación nesting LCH, tipo: PROGRAMACION, seccion: LCH, operaciones: [PROGRAMACION], turnos: [M]}
+  # ---- Soldadura estructuras
+  - {codigo: EH-SOLD1, nombre: Soldadura EH 1, tipo: PUESTO, seccion: EH, operaciones: [SOLDADURA, MONTAJE], turnos: [M, T]}
+  - {codigo: EH-SOLD2, nombre: Soldadura EH 2, tipo: PUESTO, seccion: EH, operaciones: [SOLDADURA, MONTAJE], turnos: [M]}
+  - {codigo: BAT-SOLD, nombre: Soldadura BAT, tipo: PUESTO, seccion: BAT, operaciones: [SOLDADURA], turnos: [M]}
+  - {codigo: FAPI-SOLD, nombre: Soldadura FAPI, tipo: PUESTO, seccion: FAPI, operaciones: [SOLDADURA], turnos: [M]}
+
+# Operarios ficticios (sin nombres reales). recursos: códigos que sabe manejar.
+operarios:
+  - {codigo: OP01, nombre: Operario MF-A, turno: M, seccion: MF, recursos: [MF-P1, MF-P2, MF-P3]}
+  - {codigo: OP02, nombre: Operario MF-B, turno: T, seccion: MF, recursos: [MF-P1, MF-P2]}
+  - {codigo: OP03, nombre: Operario MF-C, turno: M, seccion: MF, recursos: [MF-P2, MF-P3, MOVPINO-P1]}
+  - {codigo: OP04, nombre: Operario CIL-A, turno: M, seccion: CIL, recursos: [CIL-SIERRA, CIL-SOLD, CIL-MONT, CIL-MEC]}
+  - {codigo: OP05, nombre: Operario CIL-B, turno: T, seccion: CIL, recursos: [CIL-SOLD, CIL-MONT]}
+  - {codigo: OP06, nombre: Operario HID-A, turno: M, seccion: HID, recursos: [HID-P1]}
+  - {codigo: OP07, nombre: Operario ELE-A, turno: M, seccion: ELC, recursos: [ELC-P1, ELA-P1, ELA-P2, ELA-PRUEBA]}
+  - {codigo: OP08, nombre: Operario ELE-B, turno: T, seccion: ELA, recursos: [ELA-P1]}
+  - {codigo: OP09, nombre: Operario CAB-A, turno: M, seccion: CAB, recursos: [CAB-SOLD, CAB-MONT]}
+  - {codigo: OP10, nombre: Operario CAB-B, turno: T, seccion: CAB, recursos: [CAB-SOLD]}
+  - {codigo: OP11, nombre: Operario PINT-A, turno: M, seccion: TPPINO, recursos: [PINT-PINO, PINT-PARSI]}
+  - {codigo: OP12, nombre: Operario PINT-B, turno: T, seccion: TPPINO, recursos: [PINT-PINO]}
+  - {codigo: OP13, nombre: Operario COR-A, turno: M, seccion: COR, recursos: [LASERTUB, FICEP, SABI]}
+  - {codigo: OP14, nombre: Operario COR-B, turno: T, seccion: COR, recursos: [LASERTUB]}
+  - {codigo: OP15, nombre: Operario COR-C, turno: M, seccion: COR, recursos: [GEKA, SABI, FICEP]}
+  - {codigo: OP16, nombre: Programador CNC, turno: M, seccion: LCH, recursos: [LCH-PROG, COR-PROG]}
+  - {codigo: OP17, nombre: Operario LCH-A, turno: M, seccion: LCH, recursos: [LCH-LASER, LCH-PLEG]}
+  - {codigo: OP18, nombre: Operario LCH-B, turno: T, seccion: LCH, recursos: [LCH-LASER, LCH-PLEG]}
+  - {codigo: OP19, nombre: Soldador EH-A, turno: M, seccion: EH, recursos: [EH-SOLD1, EH-SOLD2, BAT-SOLD, FAPI-SOLD]}
+  - {codigo: OP20, nombre: Soldador EH-B, turno: T, seccion: EH, recursos: [EH-SOLD1]}
+  - {codigo: OP21, nombre: Soldador BAT-A, turno: M, seccion: BAT, recursos: [BAT-SOLD, FAPI-SOLD, CAB-SOLD]}
+
+# Tiempos estándar FICTICIOS (minutos). Se buscan de más a menos específico:
+# artículo > grupo HF > tipo de operación > sección.
+tiempos_estandar:
+  - {seccion: MF, tipo_operacion: MONTAJE, minutos_preparacion: 30, minutos_por_unidad: 50}
+  - {seccion: MF, tipo_operacion: EMBALAJE, minutos_preparacion: 20, minutos_por_unidad: 12, minutos_por_linea: 1}
+  - {seccion: MF, tipo_operacion: PREPARACION, minutos_preparacion: 15, minutos_por_unidad: 3}
+  - {seccion: MF, tipo_operacion: GENERICA, minutos_preparacion: 20, minutos_por_unidad: 5}
+  - {seccion: CIL, tipo_operacion: CORTE, minutos_preparacion: 15, minutos_por_unidad: 12}
+  - {seccion: CIL, tipo_operacion: SOLDADURA, minutos_preparacion: 20, minutos_por_unidad: 45}
+  - {seccion: CIL, tipo_operacion: MONTAJE, minutos_preparacion: 20, minutos_por_unidad: 60}
+  - {seccion: CIL, tipo_operacion: PRUEBA, minutos_preparacion: 10, minutos_por_unidad: 30}
+  - {seccion: CIL, tipo_operacion: RECTIFICADO, minutos_preparacion: 20, minutos_por_unidad: 25}
+  - {seccion: CIL, tipo_operacion: MECANIZADO, minutos_preparacion: 25, minutos_por_unidad: 30}
+  - {seccion: HID, minutos_preparacion: 20, minutos_por_unidad: 15}
+  - {seccion: HID, tipo_operacion: MONTAJE, minutos_preparacion: 30, minutos_por_unidad: 90}
+  - {seccion: ELC, minutos_preparacion: 20, minutos_por_unidad: 20}
+  - {seccion: ELC, tipo_operacion: MONTAJE_ELECTRICO, minutos_preparacion: 30, minutos_por_unidad: 120}
+  - {seccion: ELA, minutos_preparacion: 10, minutos_por_unidad: 6}
+  - {seccion: ELA, tipo_operacion: PRUEBA, minutos_preparacion: 10, minutos_por_unidad: 4}
+  - {seccion: CAB, tipo_operacion: SOLDADURA, minutos_preparacion: 20, minutos_por_unidad: 40}
+  - {seccion: CAB, minutos_preparacion: 20, minutos_por_unidad: 25}
+  - {seccion: TPPINO, tipo_operacion: PINTURA, minutos_preparacion: 30, minutos_por_unidad: 6}
+  - {seccion: TPPARSI, tipo_operacion: PINTURA, minutos_preparacion: 30, minutos_por_unidad: 6}
+  - {seccion: MOVPINO, minutos_preparacion: 15, minutos_por_unidad: 20}
+  - {seccion: COR, tipo_operacion: CORTE_TALADRO, minutos_preparacion: 20, minutos_por_unidad: 3}
+  - {seccion: COR, tipo_operacion: PUNZONADO, minutos_preparacion: 15, minutos_por_unidad: 4}
+  - {seccion: COR, tipo_operacion: CORTE, minutos_preparacion: 10, minutos_por_unidad: 3}
+  - {seccion: COR, tipo_operacion: PROGRAMACION, minutos_preparacion: 40, minutos_por_unidad: 0}
+  - {seccion: LCH, tipo_operacion: CORTE_LASER, minutos_preparacion: 15, minutos_por_unidad: 2.5}
+  - {seccion: LCH, tipo_operacion: PLEGADO, minutos_preparacion: 20, minutos_por_unidad: 3}
+  - {seccion: LCH, tipo_operacion: PROGRAMACION, minutos_preparacion: 45, minutos_por_unidad: 0.5}
+  - {seccion: EH, tipo_operacion: SOLDADURA, minutos_preparacion: 30, minutos_por_unidad: 60}
+  - {seccion: EH, tipo_operacion: MONTAJE, minutos_preparacion: 30, minutos_por_unidad: 45}
+  - {seccion: BAT, tipo_operacion: SOLDADURA, minutos_preparacion: 20, minutos_por_unidad: 50}
+  - {seccion: FAPI, tipo_operacion: SOLDADURA, minutos_preparacion: 15, minutos_por_unidad: 30}
+
+# Reglas de ruta cuando el documento no expresa la relación. EJEMPLO.
+reglas_dependencia:
+  - {grupo_hf_origen: "SOLD. MARCOS", grupo_hf_destino: "MONTAJE-EMBALAJE PUERTAS", mismo_aparato: true, descripcion: "Las puertas se sueldan antes de montarlas y embalarlas"}
+  - {grupo_hf_origen: "SOLD. HOJAS", grupo_hf_destino: "MONTAJE-EMBALAJE PUERTAS", mismo_aparato: true, descripcion: "Las hojas se sueldan antes de montarlas y embalarlas"}
+
+# Usuarios de demostración (contraseña: HIDRAL_CLAVE_DEMO o "hidral"). Cambiar en producción.
+usuarios:
+  - {usuario: admin, nombre: Administrador, rol: ADMINISTRADOR}
+  - {usuario: planificador, nombre: Planificador, rol: PLANIFICADOR}
+  - {usuario: jefe, nombre: Jefe de equipo, rol: JEFE_EQUIPO}
+  - {usuario: supervisor, nombre: Supervisor, rol: SUPERVISOR}
+  - {usuario: consulta, nombre: Consulta, rol: CONSULTA}
+  - {usuario: op01, nombre: Operario MF-A, rol: OPERARIO, operario: OP01}
+  - {usuario: op13, nombre: Operario COR-A, rol: OPERARIO, operario: OP13}
+  - {usuario: op17, nombre: Operario LCH-A, rol: OPERARIO, operario: OP17}

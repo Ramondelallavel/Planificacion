@@ -1,0 +1,89 @@
+"""Autenticación (contraseñas PBKDF2 + token firmado HMAC) y permisos por rol.
+
+Sin dependencias externas: hashlib/hmac de la biblioteca estándar.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+import os
+import time
+
+from .config import ajustes
+from .modelos.enums import Rol
+
+ITERACIONES = 240_000
+
+# Permisos por rol (punto 41). La API comprueba el permiso en cada acción.
+PERMISOS: dict[str, set[str]] = {
+    Rol.ADMINISTRADOR: {"*"},
+    Rol.PLANIFICADOR: {
+        "ver",
+        "importar",
+        "planificar",
+        "modificar_plan",
+        "configurar",
+        "recursos",
+        "incidencias",
+        "simular",
+        "validar_datos",
+        "aprobar_estimaciones",
+        "fichar_supervisado",
+    },
+    Rol.JEFE_EQUIPO: {"ver", "planificar", "modificar_plan", "incidencias", "simular", "validar_datos", "fichar_supervisado", "importar"},
+    Rol.SUPERVISOR: {"ver", "incidencias", "simular", "fichar_supervisado", "validar_datos"},
+    Rol.OPERARIO: {"ver_propio", "fichar", "incidencias"},
+    Rol.CONSULTA: {"ver"},
+}
+
+
+def tiene_permiso(rol: str, permiso: str) -> bool:
+    p = PERMISOS.get(rol, set())
+    return "*" in p or permiso in p or (permiso == "ver_propio" and "ver" in p)
+
+
+def hash_clave(clave: str) -> str:
+    sal = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", clave.encode(), sal, ITERACIONES)
+    return f"pbkdf2_sha256${ITERACIONES}${sal.hex()}${dk.hex()}"
+
+
+def verificar_clave(clave: str, almacenado: str) -> bool:
+    try:
+        _, it, sal, dk = almacenado.split("$")
+        calc = hashlib.pbkdf2_hmac("sha256", clave.encode(), bytes.fromhex(sal), int(it))
+        return hmac.compare_digest(calc.hex(), dk)
+    except ValueError:
+        return False
+
+
+def _b64(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def _unb64(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def emitir_token(usuario: str, rol: str, operario_id: int | None) -> str:
+    carga = {"u": usuario, "r": rol, "o": operario_id, "exp": int(time.time()) + ajustes().token_horas * 3600}
+    cuerpo = _b64(json.dumps(carga, separators=(",", ":")).encode())
+    firma = _b64(hmac.new(ajustes().secreto.encode(), cuerpo.encode(), hashlib.sha256).digest())
+    return f"{cuerpo}.{firma}"
+
+
+def leer_token(token: str) -> dict | None:
+    try:
+        cuerpo, firma = token.split(".")
+    except ValueError:
+        return None
+    esperada = _b64(hmac.new(ajustes().secreto.encode(), cuerpo.encode(), hashlib.sha256).digest())
+    if not hmac.compare_digest(esperada, firma):
+        return None
+    datos = json.loads(_unb64(cuerpo))
+    if datos.get("exp", 0) < time.time():
+        return None
+    return datos
