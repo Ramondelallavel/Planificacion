@@ -1,4 +1,7 @@
 // Cliente de la API REST. El token se guarda en sessionStorage (se pierde al cerrar la pestaña).
+// En la edición «navegador» la API no está en un servidor: las peticiones van al motor local.
+
+import { NAVEGADOR, pedirMotor } from './motor'
 
 export class ErrorApi extends Error {
   estado: number
@@ -57,26 +60,41 @@ async function peticion<T>(metodo: string, ruta: string, cuerpo?: unknown, formu
   const cabeceras: Record<string, string> = {}
   if (s) cabeceras.Authorization = `Bearer ${s.token}`
   if (cuerpo !== undefined) cabeceras['Content-Type'] = 'application/json'
-  const r = await fetch(`/api${ruta}`, {
-    method: metodo,
-    headers: cabeceras,
-    body: formulario ?? (cuerpo !== undefined ? JSON.stringify(cuerpo) : undefined),
-  })
-  if (r.status === 401 && ruta !== '/auth/login') {
+  let estado: number
+  let texto: string
+  if (NAVEGADOR) {
+    let bytes: Uint8Array | null = null
+    if (formulario) {
+      const r = new Response(formulario)
+      cabeceras['Content-Type'] = r.headers.get('content-type') ?? 'multipart/form-data'
+      bytes = new Uint8Array(await r.arrayBuffer())
+    } else if (cuerpo !== undefined) bytes = new TextEncoder().encode(JSON.stringify(cuerpo))
+    const r = await pedirMotor(metodo, `/api${ruta}`, cabeceras, bytes)
+    estado = r.estado
+    texto = new TextDecoder().decode(r.cuerpo)
+  } else {
+    const r = await fetch(`/api${ruta}`, {
+      method: metodo,
+      headers: cabeceras,
+      body: formulario ?? (cuerpo !== undefined ? JSON.stringify(cuerpo) : undefined),
+    })
+    estado = r.status
+    texto = await r.text()
+  }
+  if (estado === 401 && ruta !== '/auth/login') {
     guardarSesion(null)
     alCaducar?.()
   }
-  const texto = await r.text()
   let datos: unknown = null
   try {
     datos = texto ? JSON.parse(texto) : null
   } catch {
     datos = texto
   }
-  if (!r.ok) {
+  if (estado < 200 || estado >= 300) {
     const d = (datos ?? {}) as { detail?: unknown; errores?: string[] }
-    const detalle = typeof d.detail === 'string' ? d.detail : `Error ${r.status}`
-    throw new ErrorApi(r.status, detalle, d.errores ?? [], datos)
+    const detalle = typeof d.detail === 'string' ? d.detail : `Error ${estado}`
+    throw new ErrorApi(estado, detalle, d.errores ?? [], datos)
   }
   return datos as T
 }
@@ -100,6 +118,11 @@ export function urlImagenPagina(docId: number, pagina: number): string {
 // Las imágenes necesitan el token: se descargan con fetch y se convierten a URL de objeto.
 export async function imagenConToken(url: string): Promise<string> {
   const s = sesionGuardada()
+  if (NAVEGADOR) {
+    const r = await pedirMotor('GET', url, s ? { Authorization: `Bearer ${s.token}` } : {}, null)
+    if (r.estado !== 200) throw new ErrorApi(r.estado, 'No se pudo cargar la imagen')
+    return URL.createObjectURL(new Blob([r.cuerpo as BlobPart], { type: r.cabeceras['content-type'] ?? 'image/png' }))
+  }
   const r = await fetch(url, { headers: s ? { Authorization: `Bearer ${s.token}` } : {} })
   if (!r.ok) throw new ErrorApi(r.status, 'No se pudo cargar la imagen')
   return URL.createObjectURL(await r.blob())

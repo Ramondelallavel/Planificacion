@@ -62,6 +62,25 @@ Detrás de un proxy con inspección TLS, la imagen admite el certificado como se
 Con `--build-arg INSTALAR_OCR=0` se omite tesseract (imagen más ligera; las páginas escaneadas
 quedarán como `SIN_TEXTO` con su incidencia).
 
+## Edición navegador (sin servidor)
+
+La misma aplicación puede ejecutarse entera dentro del navegador: el backend Python funciona
+sobre [Pyodide](https://pyodide.org) (Python compilado a WebAssembly) en un Web Worker, con su
+base SQLite guardada en el almacenamiento del navegador (IndexedDB). El código de negocio es
+exactamente el del servidor; `backend/hidral_plan/navegador.py` solo adapta el entorno (sin
+hilos, procesamiento de PDF bloque a bloque, copia y restauración de la base).
+
+```bash
+python herramientas/empaquetar_navegador.py        # genera frontend/dist-navegador (≈36 MB)
+cd frontend/dist-navegador && python -m http.server # y abrir http://localhost:8000
+```
+
+Es la edición que se publica como página en claude.ai: allí añade «Pedir un cambio» (envía a
+Claude un comentario sobre la pantalla actual), copias automáticas en la nube de la página y
+descargas. Es monousuario por navegador: para un equipo que comparte datos, la edición con
+servidor (Docker) es la adecuada. Limitaciones: sin OCR (tesseract no existe en WebAssembly) y
+pydantic en versión 2.14 beta, la primera con rueda WebAssembly publicada.
+
 ## Desarrollo local
 
 Requisitos: Python ≥ 3.11 y Node ≥ 20.
@@ -122,7 +141,8 @@ Los tests con el PDF real (`tests/test_pdf_real.py`) se omiten si el fichero no 
   otro formato no se interpreta: queda como `PAGINA_NO_CLASIFICADA` con su texto para revisión.
 - **Integraciones**: ORTEMS, MRP y Teamcenter se importan desde exportaciones CSV. Un conector
   directo (API o base de datos) se añade implementando la misma interfaz de adaptador.
-- **Sin inteligencia artificial**: todo el procesamiento es determinista; no se envía ningún dato
-  a servicios externos.
+- **Sin inteligencia artificial en el motor**: todo el procesamiento es determinista. La edición con
+  servidor no envía datos a servicios externos; la edición publicada en claude.ai guarda copias de
+  la base en la nube de la página (privada) y envía a Claude los comentarios de «Pedir un cambio».
 - **Esquema de base de datos**: se crea al arrancar (`create_all`). No hay migraciones
   versionadas (Alembic); un cambio de esquema en una instalación con datos requiere migración manual.

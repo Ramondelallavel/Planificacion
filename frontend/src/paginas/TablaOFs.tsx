@@ -4,6 +4,7 @@ import { api } from '../api'
 import { Cargando, MensajeError, Riesgo, useDatos } from '../componentes/comunes'
 import { fecha, horas, semana } from '../formato'
 import type { OFResumen } from '../tipos'
+import { aCsv, descargar } from '../plataforma'
 
 export default function TablaOFs() {
   const [params, setParams] = useSearchParams()
@@ -46,6 +47,32 @@ export default function TablaOFs() {
             ))}
           </select>
           <input placeholder="Sección" style={{ width: 90 }} value={params.get('seccion') ?? ''} onChange={(e) => filtro('seccion', e.target.value.toUpperCase())} />
+          <button
+            disabled={!datos?.items.length}
+            onClick={() =>
+              datos &&
+              descargar(
+                'ordenes-fabricacion.csv',
+                aCsv(datos.items as unknown as Record<string, unknown>[], [
+                  ['numero', 'OF'],
+                  ['seccion', 'Sección'],
+                  ['grupo_hf', 'Grupo HF'],
+                  ['descripcion', 'Descripción'],
+                  ['semana', 'Semana'],
+                  ['estado', 'Estado'],
+                  ['estado_programacion', 'Programación'],
+                  ['programa', 'Programa'],
+                  ['horas_estimadas', 'Horas estimadas'],
+                  ['riesgo', 'Riesgo'],
+                  ['inicio_previsto', 'Inicio previsto'],
+                  ['fin_previsto', 'Fin previsto'],
+                ]),
+                'text/csv',
+              )
+            }
+          >
+            Exportar CSV
+          </button>
         </div>
       </div>
       <MensajeError error={error} />

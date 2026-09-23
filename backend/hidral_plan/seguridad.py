@@ -15,7 +15,9 @@ import time
 from .config import ajustes
 from .modelos.enums import Rol
 
-ITERACIONES = 240_000
+# Configurable para entornos sin OpenSSL (navegador), donde PBKDF2 se calcula en Python puro.
+# El número de iteraciones queda guardado en cada hash, así que cambiarlo no invalida los existentes.
+ITERACIONES = int(os.environ.get("HIDRAL_PBKDF2_ITERACIONES", "240000"))
 
 # Permisos por rol (punto 41). La API comprueba el permiso en cada acción.
 PERMISOS: dict[str, set[str]] = {
@@ -45,16 +47,36 @@ def tiene_permiso(rol: str, permiso: str) -> bool:
     return "*" in p or permiso in p or (permiso == "ver_propio" and "ver" in p)
 
 
+def _pbkdf2_sha256(clave: bytes, sal: bytes, iteraciones: int) -> bytes:
+    """PBKDF2-HMAC-SHA256 (RFC 8018). Usa hashlib si está disponible (compilado con OpenSSL);
+    si no, una implementación con hmac equivalente para una clave de 32 bytes."""
+    if hasattr(hashlib, "pbkdf2_hmac"):
+        return hashlib.pbkdf2_hmac("sha256", clave, sal, iteraciones)
+    base = hmac.new(clave, digestmod=hashlib.sha256)
+
+    def prf(msg: bytes) -> bytes:
+        h = base.copy()
+        h.update(msg)
+        return h.digest()
+
+    u = prf(sal + b"\x00\x00\x00\x01")
+    resultado = int.from_bytes(u, "big")
+    for _ in range(iteraciones - 1):
+        u = prf(u)
+        resultado ^= int.from_bytes(u, "big")
+    return resultado.to_bytes(32, "big")
+
+
 def hash_clave(clave: str) -> str:
     sal = os.urandom(16)
-    dk = hashlib.pbkdf2_hmac("sha256", clave.encode(), sal, ITERACIONES)
+    dk = _pbkdf2_sha256(clave.encode(), sal, ITERACIONES)
     return f"pbkdf2_sha256${ITERACIONES}${sal.hex()}${dk.hex()}"
 
 
 def verificar_clave(clave: str, almacenado: str) -> bool:
     try:
         _, it, sal, dk = almacenado.split("$")
-        calc = hashlib.pbkdf2_hmac("sha256", clave.encode(), bytes.fromhex(sal), int(it))
+        calc = _pbkdf2_sha256(clave.encode(), bytes.fromhex(sal), int(it))
         return hmac.compare_digest(calc.hex(), dk)
     except ValueError:
         return False

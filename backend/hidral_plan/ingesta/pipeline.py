@@ -151,7 +151,10 @@ def _pendientes_desde_json(est: EstadoPersistencia, datos: list | None) -> None:
         {"RegAparato": est.aparatos_pendientes, "RegBulto": est.bultos_pendientes, "RegComponenteBulto": est.componentes_pendientes}[nombre].append(r)
 
 
-def procesar_trabajo(trabajo_id: int, trabajador: str = "local") -> None:
+def procesar_trabajo(trabajo_id: int, trabajador: str = "local", max_bloques: int | None = None) -> None:
+    """Procesa el trabajo desde su último punto de control. Con `max_bloques` se detiene tras ese
+    número de bloques (sigue en PROCESANDO y la siguiente llamada continúa): así un entorno sin
+    hilos, como el navegador, puede informar del progreso entre bloques."""
     cfg = ajustes()
     with sesion() as s:
         t = s.get(TrabajoProcesamiento, trabajo_id)
@@ -169,7 +172,7 @@ def procesar_trabajo(trabajo_id: int, trabajador: str = "local") -> None:
         contadores = dict(t.contadores or {})
         pagina, bloque, tam = t.paginas_procesadas, t.bloque_actual, t.tamano_bloque
     try:
-        _procesar(trabajo_id, documento_id, Path(ruta), tam_bytes, contadores, pagina, bloque, tam, cfg)
+        _procesar(trabajo_id, documento_id, Path(ruta), tam_bytes, contadores, pagina, bloque, tam, cfg, max_bloques)
     except Exception as exc:
         log.exception("Fallo procesando documento %s", documento_id)
         with sesion() as s:
@@ -184,7 +187,7 @@ def procesar_trabajo(trabajo_id: int, trabajador: str = "local") -> None:
             auditar(s, "sistema", "IMPORTACION_ERROR", "DOCUMENTO", documento_id, despues={"error": str(exc)}, automatica=True)
 
 
-def _procesar(trabajo_id: int, documento_id: int, ruta: Path, tam_bytes: int, contadores: dict, pagina: int, bloque: int, tam: int, cfg) -> None:
+def _procesar(trabajo_id: int, documento_id: int, ruta: Path, tam_bytes: int, contadores: dict, pagina: int, bloque: int, tam: int, cfg, max_bloques: int | None = None) -> None:
     ctx = ContextoDocumento.desde_dict(contadores.get("contexto"))
     est = EstadoPersistencia(documento_id=documento_id)
     est.ofs_reiniciadas = set(ctx.ofs_vistas)
@@ -205,7 +208,11 @@ def _procesar(trabajo_id: int, documento_id: int, ruta: Path, tam_bytes: int, co
             plan = estimar_tamano_bloque(doc, tam_bytes, cfg.bloque_min_paginas, cfg.bloque_max_paginas, cfg.bloque_memoria_mb)
             tam = plan.tamano_inicial
             contadores["plan_bloques"] = plan.motivo
+        hechos = 0
         while pagina < n:
+            if max_bloques is not None and hechos >= max_bloques:
+                return
+            hechos += 1
             with sesion() as s:
                 t = s.get(TrabajoProcesamiento, trabajo_id)
                 if t is None or t.estado == EstadoTrabajo.CANCELADO:

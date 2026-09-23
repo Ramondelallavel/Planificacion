@@ -18,3 +18,5 @@ frontend/dist/
 *.db
 *.db-wal
 *.db-shm
+frontend/dist-navegador/
+frontend/.cache-navegador/

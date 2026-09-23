@@ -1,6 +1,10 @@
-import { createContext, useContext, useEffect, useState } from 'react'
-import { BrowserRouter, Navigate, NavLink, Route, Routes } from 'react-router-dom'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
+import { BrowserRouter, HashRouter, Navigate, NavLink, Route, Routes } from 'react-router-dom'
 import { guardarSesion, onSesionCaducada, puede, sesionGuardada, type Sesion } from './api'
+import PedirCambio from './componentes/PedirCambio'
+import { NAVEGADOR, onMotor } from './motor'
+import Datos from './paginas/Datos'
+import { guardarEnNube } from './plataforma'
 import Aparato from './paginas/Aparato'
 import Auditoria from './paginas/Auditoria'
 import Configuracion from './paginas/Configuracion'
@@ -36,9 +40,42 @@ const ROL_TEXTO: Record<string, string> = {
   CONSULTA: 'Consulta',
 }
 
+// En la edición navegador la página vive dentro de un marco: rutas en el hash, sin servidor.
+const Enrutador = NAVEGADOR ? HashRouter : BrowserRouter
+
+/** Edición navegador: tras cada cambio, una copia en la nube de la página (agrupada, cada pocos minutos). */
+function useCopiaAutomatica(activa: boolean) {
+  const [estado, setEstado] = useState<string>('')
+  const temporizador = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    if (!activa) return
+    const programar = () => {
+      window.clearTimeout(temporizador.current)
+      temporizador.current = window.setTimeout(() => {
+        guardarEnNube().then(
+          (c) => setEstado(`Copia en la nube ${new Date(c.fecha).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}`),
+          () => setEstado(''),
+        )
+      }, 3 * 60 * 1000)
+    }
+    const quitar = onMotor((e) => {
+      if (e.tipo === 'cambio') {
+        setEstado('Cambios guardados en este navegador')
+        programar()
+      }
+    })
+    return () => {
+      quitar()
+      window.clearTimeout(temporizador.current)
+    }
+  }, [activa])
+  return estado
+}
+
 export default function App() {
   const [sesion, setSesion] = useState<Sesion | null>(sesionGuardada())
   useEffect(() => onSesionCaducada(() => setSesion(null)), [])
+  const estadoCopia = useCopiaAutomatica(NAVEGADOR && !!sesion && puede(sesion, 'configurar'))
   const salir = () => {
     guardarSesion(null)
     setSesion(null)
@@ -56,7 +93,7 @@ export default function App() {
   const ver = puede(sesion, 'ver')
   return (
     <Ctx.Provider value={{ sesion, salir }}>
-      <BrowserRouter>
+      <Enrutador>
         <div className="app">
           <aside className="lateral">
             <div className="marca">
@@ -86,6 +123,7 @@ export default function App() {
                   <div className="seccion-nav">Sistema</div>
                   <NavLink to="/configuracion">Configuración de fábrica</NavLink>
                   <NavLink to="/auditoria">Auditoría</NavLink>
+                  {NAVEGADOR && <NavLink to="/datos">Datos y copias</NavLink>}
                 </>
               )}
             </nav>
@@ -97,6 +135,7 @@ export default function App() {
               <button onClick={salir} style={{ marginTop: 8 }}>
                 Salir
               </button>
+              {estadoCopia && <div className="estado-copia">{estadoCopia}</div>}
             </div>
           </aside>
           <main className="contenido">
@@ -118,6 +157,7 @@ export default function App() {
                   <Route path="/documentos/:id" element={<Documento />} />
                   <Route path="/configuracion" element={<Configuracion />} />
                   <Route path="/auditoria" element={<Auditoria />} />
+                  {NAVEGADOR && <Route path="/datos" element={<Datos />} />}
                 </>
               ) : (
                 <Route path="/" element={<Navigate to="/operario" replace />} />
@@ -126,8 +166,9 @@ export default function App() {
               <Route path="*" element={<Navigate to={ver ? '/' : '/operario'} replace />} />
             </Routes>
           </main>
+          {NAVEGADOR && <PedirCambio />}
         </div>
-      </BrowserRouter>
+      </Enrutador>
     </Ctx.Provider>
   )
 }

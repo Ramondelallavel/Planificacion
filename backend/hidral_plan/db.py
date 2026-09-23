@@ -24,7 +24,8 @@ _SessionLocal: sessionmaker[Session] | None = None
 def _configurar_sqlite(dbapi_conn, _record) -> None:
     cur = dbapi_conn.cursor()
     cur.execute("PRAGMA foreign_keys=ON")
-    cur.execute("PRAGMA journal_mode=WAL")
+    diario = ajustes().sqlite_diario
+    cur.execute(f"PRAGMA journal_mode={diario if diario in ('WAL', 'DELETE', 'TRUNCATE', 'MEMORY') else 'WAL'}")
     cur.execute("PRAGMA busy_timeout=10000")
     cur.close()
 

@@ -37,6 +37,8 @@ class Ajustes:
     # Trabajador de la cola: en desarrollo corre en un hilo del propio proceso de la API.
     worker_en_proceso: bool = field(default_factory=lambda: _bool("HIDRAL_WORKER_EN_PROCESO", True))
     worker_intervalo_s: float = field(default_factory=lambda: float(os.environ.get("HIDRAL_WORKER_INTERVALO", "1.0")))
+    # Modo de diario de SQLite: WAL en disco normal; DELETE donde no hay memoria compartida (navegador).
+    sqlite_diario: str = field(default_factory=lambda: os.environ.get("HIDRAL_SQLITE_DIARIO", "WAL").upper())
     # Reloj fijo opcional (ISO 8601) para demostraciones y pruebas reproducibles.
     reloj_fijo: str | None = field(default_factory=lambda: os.environ.get("HIDRAL_AHORA") or None)
     frontend_dir: Path = field(default_factory=lambda: Path(os.environ.get("HIDRAL_FRONTEND_DIR", str(BASE_DIR.parent / "frontend" / "dist"))))

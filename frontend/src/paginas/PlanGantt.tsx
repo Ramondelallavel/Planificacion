@@ -7,6 +7,7 @@ import Gantt, { type Vista, type Zoom } from '../componentes/Gantt'
 import { fecha, isoLocal } from '../formato'
 import type { Asignacion, Cambio, NoPlanificada, RecursoGantt } from '../tipos'
 import { TablaCambios } from './ControlTower'
+import { aCsv, descargar } from '../plataforma'
 
 interface DatosGantt {
   plan_id: number | null
@@ -77,6 +78,31 @@ export default function PlanGantt() {
             ))}
           </div>
           <button onClick={recargar}>Actualizar</button>
+          <button
+            onClick={() =>
+              descargar(
+                'plan.csv',
+                aCsv(datos.asignaciones as unknown as Record<string, unknown>[], [
+                  ['inicio', 'Inicio'],
+                  ['fin', 'Fin'],
+                  ['minutos', 'Minutos'],
+                  ['recurso', 'Recurso'],
+                  ['operario', 'Operario'],
+                  ['of', 'OF'],
+                  ['tipo', 'Operación'],
+                  ['seccion', 'Sección'],
+                  ['tanda', 'Tanda'],
+                  ['aparato', 'Aparato'],
+                  ['riesgo', 'Riesgo'],
+                  ['provisional', 'Provisional'],
+                  ['bloqueada', 'Bloqueada'],
+                ]),
+                'text/csv',
+              )
+            }
+          >
+            Exportar plan (CSV)
+          </button>
         </div>
       </div>
       <Gantt
