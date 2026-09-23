@@ -297,7 +297,7 @@ def cargar_instantanea(s: Session, ahora: datetime, tanda_ids: list[int] | None 
         )
         of_ops[of.id].append(op.id)
     # Precedencias: dentro de la OF por secuencia; entre OF, primera op de la sucesora tras la última de la predecesora
-    for of_id, lista in of_ops.items():
+    for lista in of_ops.values():
         lista.sort(key=lambda i: ops[i].secuencia)
         for a, b in zip(lista, lista[1:], strict=False):
             ops[b].predecesoras.add(a)

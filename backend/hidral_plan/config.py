@@ -40,6 +40,9 @@ class Ajustes:
     # Módulo IA (opcional; nunca decide, solo sugiere)
     ia_habilitada: bool = field(default_factory=lambda: _bool("HIDRAL_IA", False))
     ia_modelo: str = field(default_factory=lambda: os.environ.get("HIDRAL_IA_MODELO", "claude-sonnet-5"))
+    # Reloj fijo opcional (ISO 8601) para demostraciones y pruebas reproducibles.
+    reloj_fijo: str | None = field(default_factory=lambda: os.environ.get("HIDRAL_AHORA") or None)
+    frontend_dir: Path = field(default_factory=lambda: Path(os.environ.get("HIDRAL_FRONTEND_DIR", str(BASE_DIR.parent / "frontend" / "dist"))))
     cors_origenes: list[str] = field(default_factory=lambda: os.environ.get("HIDRAL_CORS", "http://localhost:5173,http://127.0.0.1:5173").split(","))
 
 
