@@ -1,7 +1,7 @@
 """Clasificación determinista de páginas por sus marcadores textuales y de maquetación.
 
-La IA solo se consulta (opcionalmente) para páginas DESCONOCIDAS y su respuesta queda
-como sugerencia pendiente de validación; nunca cambia el tipo de forma automática.
+Una página que no encaja en ningún formato conocido queda como DESCONOCIDA y genera una
+incidencia de datos para revisión humana: nunca se adivina su tipo.
 """
 
 from __future__ import annotations

@@ -37,9 +37,6 @@ class Ajustes:
     # Trabajador de la cola: en desarrollo corre en un hilo del propio proceso de la API.
     worker_en_proceso: bool = field(default_factory=lambda: _bool("HIDRAL_WORKER_EN_PROCESO", True))
     worker_intervalo_s: float = field(default_factory=lambda: float(os.environ.get("HIDRAL_WORKER_INTERVALO", "1.0")))
-    # Módulo IA (opcional; nunca decide, solo sugiere)
-    ia_habilitada: bool = field(default_factory=lambda: _bool("HIDRAL_IA", False))
-    ia_modelo: str = field(default_factory=lambda: os.environ.get("HIDRAL_IA_MODELO", "claude-sonnet-5"))
     # Reloj fijo opcional (ISO 8601) para demostraciones y pruebas reproducibles.
     reloj_fijo: str | None = field(default_factory=lambda: os.environ.get("HIDRAL_AHORA") or None)
     frontend_dir: Path = field(default_factory=lambda: Path(os.environ.get("HIDRAL_FRONTEND_DIR", str(BASE_DIR.parent / "frontend" / "dist"))))

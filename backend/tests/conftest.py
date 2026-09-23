@@ -9,22 +9,29 @@ import pytest
 import yaml
 
 from hidral_plan.config import reiniciar_ajustes
-from hidral_plan.db import crear_tablas, reiniciar_motor, sesion
+from hidral_plan.db import Base, crear_tablas, motor, reiniciar_motor, sesion
 
 RAIZ = Path(__file__).resolve().parent.parent
 AHORA = datetime(2026, 9, 21, 7, 0)  # lunes de la semana 39: la semana objetivo 202640 vence el viernes 02/10
 PDF_REAL = Path(os.environ.get("HIDRAL_PDF_EJEMPLO", RAIZ / "tests" / "fixtures" / "07_Tanda_EH-2210_OrdenesFab.pdf"))
 
 
+# Para ejecutar la batería contra PostgreSQL: HIDRAL_TEST_DB_URL=postgresql+psycopg://usuario@host/bd_pruebas
+# (¡la base se vacía en cada test!). Por defecto, SQLite en un directorio temporal.
+URL_BD_PRUEBAS = os.environ.get("HIDRAL_TEST_DB_URL")
+
+
 @pytest.fixture()
 def entorno(tmp_path, monkeypatch):
-    monkeypatch.setenv("HIDRAL_DB_URL", f"sqlite:///{tmp_path / 'hidral.db'}")
+    monkeypatch.setenv("HIDRAL_DB_URL", URL_BD_PRUEBAS or f"sqlite:///{tmp_path / 'hidral.db'}")
     monkeypatch.setenv("HIDRAL_ALMACEN_DIR", str(tmp_path / "almacen"))
     monkeypatch.setenv("HIDRAL_WORKER_EN_PROCESO", "0")
     monkeypatch.setenv("HIDRAL_AHORA", AHORA.isoformat())
     monkeypatch.setenv("HIDRAL_BLOQUE_MIN", "5")
     reiniciar_ajustes()
     reiniciar_motor()
+    if URL_BD_PRUEBAS:
+        Base.metadata.drop_all(motor())
     crear_tablas()
     yield tmp_path
     reiniciar_motor()

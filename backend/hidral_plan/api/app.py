@@ -73,6 +73,8 @@ def crear_app() -> FastAPI:
 
         @app.get("/{ruta:path}", include_in_schema=False)
         def spa(ruta: str):
+            if ruta == "api" or ruta.startswith("api/"):
+                return JSONResponse(status_code=404, content={"detail": "Ruta de API inexistente"})
             f = dist / ruta
             if ruta and f.is_file() and dist in f.resolve().parents:
                 return FileResponse(f)

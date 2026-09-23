@@ -1,0 +1,65 @@
+# Despliegue de referencia: PostgreSQL + API (sirve también la interfaz) + trabajador de documentos.
+#
+#   cp .env.example .env        # y rellenar las claves
+#   docker compose up -d --build
+#   docker compose exec api python -m hidral_plan.semilla config/fabrica_ejemplo.yaml   # solo para una demo
+#
+# Interfaz y API en http://localhost:8000 (documentación de la API en /docs).
+
+x-entorno: &entorno
+  HIDRAL_DB_URL: postgresql+psycopg://hidral:${HIDRAL_DB_CLAVE:?defina HIDRAL_DB_CLAVE en .env}@db:5432/hidral
+  HIDRAL_SECRETO: ${HIDRAL_SECRETO:?defina HIDRAL_SECRETO en .env}
+  HIDRAL_TOKEN_HORAS: ${HIDRAL_TOKEN_HORAS:-12}
+  HIDRAL_OCR: ${HIDRAL_OCR:-auto}
+  # los PDF los procesa el servicio worker, no la API
+  HIDRAL_WORKER_EN_PROCESO: "0"
+  TZ: ${TZ:-Europe/Madrid}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hidral
+      POSTGRES_USER: hidral
+      POSTGRES_PASSWORD: ${HIDRAL_DB_CLAVE:?defina HIDRAL_DB_CLAVE en .env}
+      TZ: ${TZ:-Europe/Madrid}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hidral -d hidral"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  api:
+    build: .
+    image: hidral-plan:latest
+    restart: unless-stopped
+    environment: *entorno
+    volumes:
+      - almacen:/datos
+    ports:
+      - "${HIDRAL_PUERTO:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    image: hidral-plan:latest
+    restart: unless-stopped
+    command: ["python", "-m", "hidral_plan.ingesta.cola"]
+    environment: *entorno
+    # mismo almacén de ficheros que la API (los PDF se guardan por su SHA-256)
+    volumes:
+      - almacen:/datos
+    healthcheck:
+      disable: true
+    depends_on:
+      # la API crea el esquema al arrancar; así el worker no compite con ella
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  almacen:
