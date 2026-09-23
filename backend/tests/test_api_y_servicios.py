@@ -208,3 +208,21 @@ def test_what_if_no_modifica_el_plan_real(fabrica, importar):
         assert sv.plan_activo(s).id == plan.id
         assert {k: (v.inicio, v.fin) for k, v in sv.asignaciones_de(s, sv.plan_activo(s)).items()} == antes
         assert s.get(Recurso, lt.id).estado == "OPERATIVO"
+
+
+def test_what_if_incremental_conserva_lo_que_ya_no_era_planificable(fabrica, importar):
+    """Una avería no puede hacer planificable lo que no lo era: el plan simulado conserva las
+    operaciones no planificables del plan actual (antes desaparecían y el riesgo «mejoraba»)."""
+    importar(_pdf(fabrica))
+    with sesion() as s:
+        sv.generar_plan(s, "test", AHORA)
+        of = s.scalar(select(OrdenFabricacion).where(OrdenFabricacion.grupo_hf == "SOLDADURA ESTRIBO"))
+        sv.registrar_incidencia(s, {"tipo": "FALTA_MATERIAL", "of_id": of.id, "descripcion": "Sin chapa"}, "jefe", AHORA)
+    with sesion() as s:
+        n_base = len(sv.plan_activo(s).no_planificadas)
+        assert n_base > 0
+        lt = s.scalar(select(Recurso).where(Recurso.codigo == "LASERTUB"))
+        r = sv.simular_escenario(s, {"modo": "incremental", "averias": [{"recurso_id": lt.id, "horas": 4}]}, "jefe", AHORA, guardar=False)
+    assert r["kpis_base"]["no_planificadas"] == n_base
+    assert r["kpis_simulado"]["no_planificadas"] >= n_base
+    assert r["kpis_simulado"]["cumplimiento_semana"] <= r["kpis_base"]["cumplimiento_semana"]

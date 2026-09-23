@@ -2,7 +2,7 @@
 
 ```bash
 cd backend
-python -m pytest                        # 39 pruebas; SQLite temporal por prueba
+python -m pytest                        # 40 pruebas; SQLite temporal por prueba
 HIDRAL_TEST_DB_URL=postgresql+psycopg://usuario@host/bd_pruebas python -m pytest   # misma batería en PostgreSQL (vacía esa base)
 ```
 
@@ -64,6 +64,7 @@ Se ejecutan si `backend/tests/fixtures/07_Tanda_EH-2210_OrdenesFab.pdf` existe (
 | `test_aprendizaje_propone_y_requiere_aprobacion` | propone con muestras suficientes, no aplica sin aprobar, aprobar crea versión y revertir la deshace |
 | `test_reanudacion_tras_caida` | un trabajo interrumpido continúa desde su último bloque sin duplicar datos |
 | `test_what_if_no_modifica_el_plan_real` | el simulador no toca el plan oficial |
+| `test_what_if_incremental_conserva_lo_que_ya_no_era_planificable` | en una simulación incremental, lo que ya no era planificable sigue sin serlo: una avería no puede mejorar el cumplimiento |
 
 Además, `tests/test_unitarios.py` cubre números en formato español, parámetros, semana desde `S40`,
 ventanas de turno con pausas y fin de semana, reparto de operaciones entre turnos, paradas,
@@ -71,7 +72,7 @@ ocupación y seguridad (hash de contraseñas y tokens).
 
 ## Resultados de referencia
 
-- 39 pruebas superadas en SQLite y en PostgreSQL 16.
+- 40 pruebas superadas en SQLite (las 39 anteriores a la corrección del simulador, también en PostgreSQL 16).
 - Tanda 2210: 99 páginas en 2 bloques (~1,6 s en el entorno de pruebas), 130 OF con hoja propia más
   9 referenciadas sin hoja, 970 líneas, 2 aparatos, 36 bultos, 149 dependencias, 0 ciclos. Con la fábrica de
   ejemplo: 140 operaciones planificadas y 8 no planificables, todas explicadas (sección `PLPINO`

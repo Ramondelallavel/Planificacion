@@ -142,6 +142,10 @@ def simular(inst_base: Instantanea, plan_base: dict[int, AsigP] | None, esc: dic
                         afectadas.add(s)
                         cambiado = True
         assert res is not None
+        # lo que ya no era planificable en el plan base sigue sin serlo (no se recalcula en modo incremental)
+        for k, v in (no_plan_base or {}).items():
+            if k in inst.ops and k not in res.asignaciones and k not in res.no_planificadas and k not in afectadas:
+                res.no_planificadas[k] = v
     else:
         res = programar(inst)
     sim = _resumen(inst, res)
