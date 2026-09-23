@@ -267,17 +267,18 @@ def proponer_estimaciones(s: Session) -> list[dict]:
     """Compara tiempo real frente a planificado por tiempo estándar. Solo PROPONE."""
     cfg = configuracion.obtener(s, "aprendizaje")
     minimo, desv = int(cfg.get("muestras_minimas", 5)), float(cfg.get("desviacion_minima", 0.10))
-    ratios: dict[int, list[float]] = {}
+    # una muestra por operación terminada (aunque tenga varios fichajes: el real ya está acumulado)
+    por_te: dict[int, dict[int, float]] = {}
     for _f, op in s.execute(
         select(Fichaje, Operacion)
         .join(Operacion, Operacion.id == Fichaje.operacion_id)
         .where(Fichaje.estado == "CERRADO", Operacion.estado == EstadoOperacion.TERMINADA, Operacion.tiempo_estandar_id.is_not(None))
     ):
         if op.duracion_estimada_min and op.duracion_real_min:
-            ratios.setdefault(op.tiempo_estandar_id, []).append(op.duracion_real_min / op.duracion_estimada_min)
+            por_te.setdefault(op.tiempo_estandar_id, {})[op.id] = op.duracion_real_min / op.duracion_estimada_min
     nuevas = []
-    for te_id, rs in ratios.items():
-        rs = list(dict.fromkeys(rs))
+    for te_id, muestras in por_te.items():
+        rs = list(muestras.values())
         if len(rs) < minimo:
             continue
         mediana = statistics.median(rs)

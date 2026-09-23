@@ -312,6 +312,10 @@ def asegurar_secciones(s: Session, documento_id: int) -> list[str]:
     for cod, completa in s.execute(select(OrdenFabricacion.seccion_codigo, OrdenFabricacion.seccion_completa).where(OrdenFabricacion.documento_id == documento_id).distinct()):
         if cod:
             usadas.setdefault(cod, completa)
+    from ..modelos import PaginaDocumento
+
+    for (cod,) in s.execute(select(PaginaDocumento.seccion_codigo).where(PaginaDocumento.documento_id == documento_id, PaginaDocumento.seccion_codigo.is_not(None)).distinct()):
+        usadas.setdefault(cod, None)
     nuevas = []
     for cod, completa in usadas.items():
         if cod not in conocidas:

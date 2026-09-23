@@ -192,6 +192,7 @@ def _aplicar_of(s: Session, est: EstadoPersistencia, r: RegOF, bloque: int) -> N
         of = OrdenFabricacion(numero=r.numero)
         s.add(of)
         est.contadores["ofs"] += 1
+    repetida_en_conflicto = False
     if r.numero not in est.ofs_reiniciadas:
         # primera vez que aparece en este documento: sus líneas se sustituyen (nueva versión)
         if of.id is not None:
@@ -200,6 +201,16 @@ def _aplicar_of(s: Session, est: EstadoPersistencia, r: RegOF, bloque: int) -> N
             of.consumos = []
         of.paginas = []
         est.ofs_reiniciadas.add(r.numero)
+    elif of.seccion_completa and r.seccion_completa and of.seccion_completa != r.seccion_completa:
+        # la OF ya apareció en este documento con otra sección: se conserva la primera aparición
+        # (el parser ya ha registrado OF_DUPLICADA crítica) y no se mezclan datos de ambas
+        repetida_en_conflicto = True
+    if repetida_en_conflicto:
+        of.paginas = sorted(set((of.paginas or []) + [r.pagina]))
+        s.flush()
+        est.ofs[r.numero] = of.id
+        _origen(s, est, "OF", of.id, r.pagina, bloque, r.texto_origen, detalle="aparición duplicada en conflicto (no aplicada)")
+        return
     of.tanda_id = est.tanda_id
     of.seccion_codigo = r.seccion_codigo or of.seccion_codigo
     of.seccion_completa = r.seccion_completa or of.seccion_completa

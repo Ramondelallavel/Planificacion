@@ -59,6 +59,8 @@ DEFECTOS: dict[str, dict[str, Any]] = {
             "congelar_minutos": 60,  # lo que empieza en la próxima hora no se mueve al replanificar
             "planificar_pendiente_programacion": True,  # planificar provisionalmente tras la programación
             "unidades_trabajo": ["SALIDA", "SALIDA_INTERNA", "PIEZA_CHAPA"],
+            # en secciones con programación (LCH, COR/LaserTub) solo estas operaciones necesitan programa de máquina
+            "tipos_con_programa": ["CORTE_LASER", "CORTE_TALADRO", "PUNZONADO", "CORTE"],
         },
     },
     "aprendizaje": {

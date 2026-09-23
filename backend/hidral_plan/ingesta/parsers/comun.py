@@ -64,12 +64,14 @@ def leer_cabecera(pagina: PaginaExtraida, y_max: float = 125.0) -> Cabecera:
             cab.pagina_de = (int(m.group(1)), int(m.group(2)))
             cab.y_fin = max(cab.y_fin, s.y1)
         elif t.startswith("F. Emisi"):
-            # la fecha es el span inmediatamente a la derecha en la misma línea
-            candidatos = [o for o in spans if abs(o.y0 - s.y0) < 2 and o.x0 >= s.x1 - 1]
-            if candidatos:
-                f = fecha_desde_texto(min(candidatos, key=lambda o: o.x0).texto)
-                if f:
-                    cab.fecha_emision = f.isoformat()
+            # la fecha puede venir en el mismo fragmento ("F. Emisión: 15/09/26") o en el siguiente a la derecha
+            f = fecha_desde_texto(t)
+            if f is None:
+                candidatos = [o for o in spans if abs(o.y0 - s.y0) < 2 and o.x0 >= s.x1 - 1]
+                if candidatos:
+                    f = fecha_desde_texto(min(candidatos, key=lambda o: o.x0).texto)
+            if f:
+                cab.fecha_emision = f.isoformat()
     cab.texto = " | ".join(partes)
     return cab
 

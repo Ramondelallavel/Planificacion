@@ -128,7 +128,7 @@ def derivar_operaciones(s: Session, of_ids: list[int], documento_id: int | None 
                 n_lineas = len(refs)
 
             # Programación (LCH / LaserTub y demás secciones configuradas como tales)
-            requiere = bool(sec and sec.requiere_programacion)
+            requiere = bool(sec and sec.requiere_programacion and tipo in set(params.get("tipos_con_programa", [])))
             if of.programa_codigo:
                 if of.id not in programas:
                     s.add(

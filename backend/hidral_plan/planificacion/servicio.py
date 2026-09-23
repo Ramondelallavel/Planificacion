@@ -650,25 +650,32 @@ def mover_asignacion(
     plan_mem = asignaciones_de(s, plan)
     actual = plan_mem[operacion_id]
     op = inst.ops.get(operacion_id)
+    pedido = {"inicio": inicio.isoformat() if inicio else None, "recurso_id": recurso_id, "operario_id": operario_id}
+
+    def rechazar(errores: list[str]) -> None:
+        # todo intento rechazado queda auditado (quién, qué pidió y por qué no es posible)
+        auditar(s, usuario, "CAMBIO_MANUAL_RECHAZADO", "ASIGNACION", operacion_id, antes=_foto(inst, actual), despues=pedido, motivo="; ".join(errores))
+        raise CambioRechazado(errores)
+
     if op is None:
-        raise CambioRechazado(["La operación ya no está pendiente"])
+        rechazar(["La operación ya no está pendiente"])
     nuevo_rec = recurso_id if recurso_id is not None else actual.recurso_id
     r = inst.recursos.get(nuevo_rec)
     if r is None:
-        raise CambioRechazado(["Recurso inexistente o inactivo"])
+        rechazar(["Recurso inexistente o inactivo"])
     nuevo_op = operario_id if operario_id is not None else actual.operario_id
     o = inst.operarios.get(nuevo_op) if (nuevo_op is not None and r.requiere_operario) else None
     if r.requiere_operario and o is None:
-        raise CambioRechazado([f"{r.codigo} necesita un operario válido"])
+        rechazar([f"{r.codigo} necesita un operario válido"])
     vent = _ventanas_combinadas(inst, r, o)
     ini = inicio or actual.inicio
     minutos = max(0.0, (op.duracion or actual.minutos) - op.minutos_hechos)
     tramos = repartir(vent, ini, minutos)
     if tramos is None:
-        raise CambioRechazado(["No hay ventana laborable suficiente en el horizonte para ese inicio"])
+        rechazar(["No hay ventana laborable suficiente en el horizonte para ese inicio"])
     if tramos[0][0] != ini:
         # el inicio pedido cae fuera de turno: se informa en lugar de moverlo en silencio
-        raise CambioRechazado([f"{ini:%d/%m %H:%M} está fuera de turno para {r.codigo}{' / ' + o.codigo if o else ''}; primer inicio posible: {tramos[0][0]:%d/%m %H:%M}"])
+        rechazar([f"{ini:%d/%m %H:%M} está fuera de turno para {r.codigo}{' / ' + o.codigo if o else ''}; primer inicio posible: {tramos[0][0]:%d/%m %H:%M}"])
     candidata = AsigP(
         operacion_id,
         actual.of_id,
@@ -685,8 +692,8 @@ def mover_asignacion(
     )
     errores, avisos = validar_asignacion(inst, candidata, {k: v for k, v in plan_mem.items() if k != operacion_id})
     if errores:
-        auditar(s, usuario, "CAMBIO_MANUAL_RECHAZADO", "ASIGNACION", operacion_id, antes=_foto(inst, actual), despues=_foto(inst, candidata), motivo="; ".join(errores))
-        raise CambioRechazado(errores)
+        pedido.update(_foto(inst, candidata))
+        rechazar(errores)
     expl = dict(actual.explicacion or {})
     expl["cambio_manual"] = {"usuario": usuario, "motivo": motivo, "fecha": ahora.isoformat()}
     candidata.explicacion = expl
