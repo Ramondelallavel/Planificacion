@@ -63,6 +63,12 @@ DEFECTOS: dict[str, dict[str, Any]] = {
             "tipos_con_programa": ["CORTE_LASER", "CORTE_TALADRO", "PUNZONADO", "CORTE"],
         },
     },
+    # Rendimiento de cada equipo (sección) frente a los tiempos estándar: 100 = tiempos tal cual;
+    # 125 = el equipo hace el trabajo en 100/125 del tiempo; 80 = necesita un 25 % más.
+    "rendimiento_secciones": {
+        "descripcion": "Rendimiento de cada sección en % sobre los tiempos estándar (100 = sin ajuste)",
+        "valor": {},
+    },
     "aprendizaje": {
         "descripcion": "Aprendizaje de tiempos: nunca se aplica sin aprobación",
         "valor": {"muestras_minimas": 5, "desviacion_minima": 0.10},

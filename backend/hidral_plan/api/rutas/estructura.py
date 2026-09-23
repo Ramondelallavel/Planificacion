@@ -26,8 +26,9 @@ from ...modelos import (
 )
 from ...modelos.enums import ESTADOS_OF_CERRADOS
 from ...planificacion import servicio as sv
+from ...servicios import tandas as gt
 from ...servicios.auditoria import auditar
-from ..deps import UsuarioActual, get_sesion, requiere
+from ..deps import UsuarioActual, ahora, get_sesion, requiere
 
 router = APIRouter(tags=["estructura"])
 
@@ -64,7 +65,12 @@ def tandas(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere
 class CambioTanda(BaseModel):
     incluida_en_plan: bool | None = None
     estado: str | None = None
+    producto: str | None = None
+    semana: str | None = None
     motivo: str | None = None
+
+
+ESTADOS_TANDA = {"ACTIVA", "ARCHIVADA", "CERRADA"}
 
 
 @router.patch("/tandas/{tanda_id}")
@@ -72,13 +78,57 @@ def cambiar_tanda(tanda_id: int, datos: CambioTanda, s: Session = Depends(get_se
     t = s.get(Tanda, tanda_id)
     if t is None:
         raise HTTPException(404, "Tanda inexistente")
-    antes = {"incluida_en_plan": t.incluida_en_plan, "estado": t.estado}
+    antes = {"incluida_en_plan": t.incluida_en_plan, "estado": t.estado, "producto": t.producto}
+    if datos.estado:
+        if datos.estado not in ESTADOS_TANDA:
+            raise HTTPException(400, f"Estado de tanda no válido: {datos.estado}")
+        t.estado = datos.estado
+        # archivar la saca del plan; reactivarla la devuelve
+        t.incluida_en_plan = datos.estado == "ACTIVA"
     if datos.incluida_en_plan is not None:
         t.incluida_en_plan = datos.incluida_en_plan
-    if datos.estado:
-        t.estado = datos.estado
-    auditar(s, u.usuario, "CAMBIO_TANDA", "TANDA", t.numero, antes=antes, despues={"incluida_en_plan": t.incluida_en_plan, "estado": t.estado}, motivo=datos.motivo)
-    return {"id": t.id}
+    if datos.producto is not None:
+        t.producto = datos.producto.strip() or None
+    auditar(s, u.usuario, "CAMBIO_TANDA", "TANDA", t.numero, antes=antes, despues={"incluida_en_plan": t.incluida_en_plan, "estado": t.estado, "producto": t.producto}, motivo=datos.motivo)
+    if datos.semana:
+        try:
+            gt.cambiar_semana(s, t.id, datos.semana, u.usuario, datos.motivo)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+    return {"id": t.id, "estado": t.estado, "incluida_en_plan": t.incluida_en_plan, "semana": t.semana_codigo}
+
+
+@router.delete("/tandas/{tanda_id}")
+def eliminar_tanda(tanda_id: int, motivo: str | None = None, replanificar: bool = True, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
+    """Elimina la tanda y todo lo que salió de su PDF; después regenera el plan activo."""
+    try:
+        r = gt.eliminar_tanda(s, tanda_id, u.usuario, motivo)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except gt.TandaConTrabajo as e:
+        raise HTTPException(409, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+    if replanificar and sv.plan_activo(s) is not None:
+        p = sv.generar_plan(s, u.usuario, ahora(), f"Plan sin la tanda {r['tanda']}", motivo=f"Tanda {r['tanda']} eliminada" + (f": {motivo}" if motivo else ""))
+        r["plan_id"] = p["plan_id"]
+    return r
+
+
+class CambioAparato(BaseModel):
+    semana: str
+    motivo: str | None = None
+
+
+@router.patch("/aparatos/{ap_id}")
+def cambiar_aparato(ap_id: int, datos: CambioAparato, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
+    ap = s.get(Aparato, ap_id)
+    if ap is None:
+        raise HTTPException(404, "Aparato inexistente")
+    try:
+        return gt.cambiar_semana(s, ap.tanda_id, datos.semana, u.usuario, datos.motivo, aparato_id=ap.id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 @router.get("/tandas/{tanda_id}")
@@ -108,7 +158,7 @@ def tanda(tanda_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = De
     ]
     return {
         "id": t.id, "numero": t.numero, "producto": t.producto, "semana": t.semana_codigo, "estado": t.estado, "riesgo": t.riesgo_nivel,
-        "motivos": t.riesgo_motivos, "progreso": t.progreso, "carga_restante_h": t.carga_restante_h, "aparatos": aparatos, "secciones": secciones,
+        "motivos": t.riesgo_motivos, "progreso": t.progreso, "incluida_en_plan": t.incluida_en_plan, "documento_id": t.documento_id, "carga_restante_h": t.carga_restante_h, "aparatos": aparatos, "secciones": secciones,
         "ofs_urgentes": s.scalar(select(func.count(OrdenFabricacion.id)).where(OrdenFabricacion.tanda_id == tanda_id, OrdenFabricacion.urgente.is_(True))),
         "ofs_total": s.scalar(select(func.count(OrdenFabricacion.id)).where(OrdenFabricacion.tanda_id == tanda_id)),
     }

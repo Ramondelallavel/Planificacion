@@ -2,6 +2,7 @@ import { Link, useParams } from 'react-router-dom'
 import { api, puede } from '../api'
 import { useSesion } from '../App'
 import { Cargando, MensajeError, Riesgo, useDatos } from '../componentes/comunes'
+import GestionTanda from '../componentes/GestionTanda'
 import Priorizar from '../componentes/Priorizar'
 import { fecha, horas, pct, semana } from '../formato'
 import type { Nivel } from '../tipos'
@@ -12,6 +13,7 @@ interface TandaDet {
   producto: string | null
   semana: string | null
   estado: string
+  incluida_en_plan: boolean
   riesgo: Nivel
   motivos: string[] | null
   progreso: number
@@ -53,28 +55,12 @@ export default function Tanda() {
             {t.producto} · semana de fabricación {semana(t.semana)} · progreso {pct(t.progreso)} · {horas(t.carga_restante_h)} pendientes · {t.aparatos.length} aparato(s)
           </div>
         </div>
-        {puede(sesion, 'planificar') && (
-          <div className="botones">
-            <button
-              onClick={async () => {
-                await api.patch(`/tandas/${id}`, { incluida_en_plan: false, motivo: 'Excluida manualmente del plan' })
-                recargar()
-              }}
-            >
-              Excluir del plan
-            </button>
-            <button
-              onClick={async () => {
-                await api.patch(`/tandas/${id}`, { incluida_en_plan: true, motivo: 'Incluida en el plan' })
-                recargar()
-              }}
-            >
-              Incluir en el plan
-            </button>
-          </div>
-        )}
-        {puede(sesion, 'modificar_plan') && <Priorizar tanda_id={id} urgentes={t.ofs_urgentes} total={t.ofs_total} onCambio={recargar} />}
+        <div className="acciones-cabecera">
+          {puede(sesion, 'planificar') && <GestionTanda t={t} onCambio={recargar} />}
+          {puede(sesion, 'modificar_plan') && <Priorizar tanda_id={id} urgentes={t.ofs_urgentes} total={t.ofs_total} onCambio={recargar} />}
+        </div>
       </div>
+      {t.estado !== 'ACTIVA' && <div className="mensaje aviso">Tanda {t.estado.toLowerCase()}: no entra en el plan. Pulsa «Reactivar» para volver a planificarla.</div>}
       {t.motivos && t.motivos.length > 0 && (
         <div className="mensaje aviso">
           <ul>

@@ -194,3 +194,20 @@ export interface OFResumen {
   prioridad_ortems: number | null
   paginas: number[] | null
 }
+
+export interface Recurso {
+  id: number
+  codigo: string
+  nombre: string
+  tipo: string
+  seccion: string | null
+  capacidad: number
+  estado: string
+  operaciones: string[] | null
+  alias: string[] | null
+  turnos: string[] | null
+  requiere_operario: boolean
+  activo: boolean
+  fuente: string | null
+  parada_actual: { inicio: string; fin: string | null; motivo: string } | null
+}

@@ -42,6 +42,7 @@ const SUGERENCIAS = [
   '¿Qué pasa si la máquina más cargada se avería 8 horas?',
   '¿Compensa un turno extra el sábado? Simúlalo.',
   '¿Qué operaciones se están desviando más de su tiempo previsto?',
+  '¿Qué equipo está más cargado y cuánta gente le haría falta?',
 ]
 
 const ERRORES: Record<string, string> = {
@@ -210,6 +211,59 @@ function herramientas(puedeSimular: boolean, informar: (t: string) => void): Her
         }
       },
     },
+    {
+      name: 'carga_equipos',
+      description:
+        'Carga de trabajo de cada equipo (sección): horas pendientes frente a capacidad de máquinas y personas en los próximos días, porcentaje de carga, rendimiento configurado, número de operarios y máquinas, y de qué tandas y tipos de operación viene el trabajo.',
+      inputSchema: { type: 'object', properties: { dias: { type: 'number', description: '7, 14 o 21 (por defecto 14)' } } },
+      async execute(input) {
+        informar('Mirando la carga de cada equipo…')
+        const d = await api.get<Cualquiera>(`/carga?dias=${[7, 14, 21].includes(Number(input.dias)) ? Number(input.dias) : 14}`)
+        return {
+          hasta: d.hasta,
+          equipos: d.secciones.map((e: Cualquiera) => ({
+            seccion: e.seccion,
+            pendiente_h: e.demanda_h,
+            capacidad_h: e.capacidad_h,
+            capacidad_maquinas_h: e.capacidad_maquinas_h,
+            capacidad_personas_h: e.capacidad_personas_h,
+            carga: pct(e.carga),
+            limitada_por: e.limitada_por,
+            rendimiento_pct: e.rendimiento,
+            operarios: e.operarios.length,
+            maquinas: e.maquinas.map((m: Cualquiera) => m.codigo),
+            sin_tiempo: e.sin_tiempo,
+            por_tanda: e.por_tanda.slice(0, 5),
+            por_tipo: e.por_tipo.slice(0, 5),
+          })),
+        }
+      },
+    },
+    {
+      name: 'materiales',
+      description:
+        'Materiales que consumen las OF abiertas frente a stock y entradas previstas: materiales con falta, OF bloqueadas por material o esperando una entrada. Solo cuentan los materiales controlados (con stock registrado).',
+      async execute() {
+        informar('Revisando materiales…')
+        const d = await api.get<Cualquiera>('/materiales')
+        const importantes = d.materiales.filter((m: Cualquiera) => m.controlado || m.ofs_falta).sort((a: Cualquiera, b: Cualquiera) => (a.balance ?? 0) - (b.balance ?? 0))
+        return {
+          resumen: d.resumen,
+          controlados: importantes.slice(0, 25).map((m: Cualquiera) => ({
+            codigo: m.codigo,
+            descripcion: m.descripcion,
+            unidad: m.unidad,
+            necesidad: m.necesidad,
+            stock: m.stock,
+            entradas: m.entradas.map((e: Cualquiera) => `${e.cantidad} el ${e.fecha.slice(0, 10)}`),
+            balance: m.balance,
+            ofs_sin_material: m.ofs_falta,
+            ofs_esperan: m.ofs_esperan,
+          })),
+          sin_controlar: d.materiales.filter((m: Cualquiera) => !m.controlado).length,
+        }
+      },
+    },
   ]
   if (puedeSimular)
     lista.push({
@@ -332,7 +386,7 @@ export default function Asistente() {
           ? 'Usa SIEMPRE las herramientas para obtener los datos reales antes de afirmar nada: no inventes OF, máquinas, cifras ni fechas. Si un dato no está, dilo. '
           : 'Responde solo con los datos que se te dan; no inventes nada. ') +
         'Las simulaciones trabajan sobre una copia: el plan real solo cambia cuando un responsable lo aplica desde Simulación («Aplicar y replanificar») o registra una incidencia. ' +
-        'Cuando recomiendes algo, di qué pantalla usar (Control Tower, Plan · Gantt, Capacidad, Seguimiento, Incidencias, Simulación, Configuración → Calendario). ' +
+        'Cuando recomiendes algo, di qué pantalla usar (Control Tower, Plan · Gantt, Capacidad, Carga de trabajo, Materiales, Seguimiento, Incidencias, Simulación, Tandas, Configuración → Calendario). ' +
         'Formato: Markdown sencillo, párrafos cortos, listas y negritas; una tabla pequeña solo si ayuda. Fechas en formato dd/mm y horas hh:mm.\n\n' +
         `Ahora: ${new Date().toLocaleString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}.\n` +
         `Turnos: ${ts

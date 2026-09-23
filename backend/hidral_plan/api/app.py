@@ -16,7 +16,7 @@ from ..config import ajustes
 from ..db import crear_tablas
 from ..planificacion.servicio import CambioRechazado, PlanBloqueado
 from ..servicios.ejecucion import FichajeRechazado
-from .rutas import auth, dashboard, documentos, estructura, gestion, plan, planta, recursos
+from .rutas import auth, carga, dashboard, documentos, estructura, gestion, materiales, plan, planta, recursos
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ def crear_app() -> FastAPI:
     async def _valor(_: Request, exc: ValueError):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
-    for r in (auth, documentos, estructura, plan, planta, recursos, dashboard, gestion):
+    for r in (auth, documentos, estructura, plan, planta, recursos, dashboard, gestion, carga, materiales):
         app.include_router(r.router, prefix="/api")
 
     @app.get("/api/salud")

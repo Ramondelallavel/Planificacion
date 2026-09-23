@@ -113,6 +113,8 @@ def derivar_operaciones(s: Session, of_ids: list[int], documento_id: int | None 
 
     for i in range(0, len(of_ids), 500):
         for of in s.scalars(select(OrdenFabricacion).where(OrdenFabricacion.id.in_(of_ids[i : i + 500]))):
+            if of.fuente == Fuente.USUARIO:
+                continue  # OF creada a mano: sus operaciones las decidió una persona
             sec = secciones.get(of.seccion_codigo or "")
             lineas = lineas_por_of.get(of.id, [])
             tipo, motivo_tipo = tipo_operacion(of, sec, mapeo)
@@ -151,8 +153,9 @@ def derivar_operaciones(s: Session, of_ids: list[int], documento_id: int | None 
                 estado_prog = EstadoProgramacion.NO_REQUIERE
 
             existentes = list(of.operaciones)
-            if any(op.estado in ESTADOS_INICIADOS for op in existentes):
-                # la OF ya está en ejecución: no se reestructura, solo se actualizan tiempos pendientes
+            if any(op.estado in ESTADOS_INICIADOS or op.fuente == Fuente.USUARIO for op in existentes):
+                # la OF ya está en ejecución, o una persona ha cambiado sus operaciones: no se
+                # reestructura, solo se actualizan los tiempos que no se fijaron a mano
                 reestructurar = False
             else:
                 reestructurar = True
@@ -224,7 +227,8 @@ def derivar_operaciones(s: Session, of_ids: list[int], documento_id: int | None 
             else:
                 ops = existentes
                 for o in ops:
-                    if o.estado not in ESTADOS_INICIADOS:
+                    # lo que ha fijado una persona (duración manual, operación añadida) no se recalcula
+                    if o.estado not in ESTADOS_INICIADOS and o.fuente != Fuente.USUARIO:
                         o.duracion_estimada_min, o.origen_duracion, te = duracion(o.tipo)
                         o.tiempo_estandar_id = te.id if te else None
 

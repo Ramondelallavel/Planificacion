@@ -70,6 +70,26 @@ def listar(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere
     return [_doc(d) for d in s.scalars(select(Documento).order_by(Documento.id.desc()).limit(200))]
 
 
+@router.delete("/documentos/{doc_id}")
+def eliminar(doc_id: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("importar"))) -> dict:
+    """Borra un documento que no generó ninguna tanda (con error, cancelado o vacío). Las tandas se eliminan desde la tanda."""
+    from ...modelos import Tanda
+    from ...servicios.tandas import eliminar_documento
+
+    d = s.get(Documento, doc_id)
+    if d is None:
+        raise HTTPException(404, "Documento inexistente")
+    tanda = s.scalar(select(Tanda.numero).where(Tanda.documento_id == doc_id).limit(1))
+    if tanda or s.scalar(select(OrdenFabricacion.id).where(OrdenFabricacion.documento_id == doc_id).limit(1)):
+        raise HTTPException(409, f"El documento tiene datos de fabricación{f' (tanda {tanda})' if tanda else ''}: elimina la tanda desde su página")
+    try:
+        nombre = eliminar_documento(s, doc_id)
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+    auditar(s, u.usuario, "ELIMINAR_DOCUMENTO", "DOCUMENTO", doc_id, antes={"nombre": nombre})
+    return {"id": doc_id, "nombre": nombre}
+
+
 @router.get("/documentos/{doc_id}")
 def detalle(doc_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     d = s.get(Documento, doc_id)

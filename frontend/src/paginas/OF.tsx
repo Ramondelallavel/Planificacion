@@ -6,6 +6,7 @@ import { Cargando, ExplicacionDecision, MensajeError, Modal, Riesgo, useDatos } 
 import { fecha, horas, isoLocal, semana } from '../formato'
 import type { Explicacion, NoPlanificada, OFResumen } from '../tipos'
 import { VisorPagina } from './Documento'
+import { EditarOperacion, NuevaOperacion, type OpEditable } from '../componentes/EditorOperaciones'
 
 interface Dep {
   id: number
@@ -107,6 +108,8 @@ export default function OF() {
   const [pagina, setPagina] = useState<number | null>(null)
   const [explic, setExplic] = useState<Explicacion | null>(null)
   const [accion, setAccion] = useState<string | null>(null)
+  const [editarOp, setEditarOp] = useState<OpEditable | 'nueva' | null>(null)
+  const [errOp, setErrOp] = useState<unknown>(null)
   if (error) return <MensajeError error={error} />
   if (!o) return <Cargando />
   const modificar = puede(sesion, 'modificar_plan')
@@ -138,6 +141,9 @@ export default function OF() {
               </button>
             )}
             {!o.tiene_hoja && <button onClick={() => setAccion('disponible')}>Fecha prevista (externa)</button>}
+            <button className="peligro" onClick={() => setAccion('eliminar')}>
+              Eliminar OF
+            </button>
           </div>
         )}
       </div>
@@ -178,6 +184,7 @@ export default function OF() {
                 <th className="num">Real</th>
                 <th>Origen de la duración</th>
                 <th>Plan</th>
+                {modificar && <th />}
               </tr>
             </thead>
             <tbody>
@@ -215,10 +222,63 @@ export default function OF() {
                       '—'
                     )}
                   </td>
+                  {modificar && (
+                    <td>
+                      {op.estado !== 'TERMINADA' && (
+                        <div className="botones">
+                          <button onClick={() => setEditarOp(op)}>Editar</button>
+                          {!['EN_CURSO', 'PAUSADA'].includes(op.estado) && o.operaciones.length > 1 && (
+                            <button
+                              onClick={async () => {
+                                setErrOp(null)
+                                try {
+                                  await api.del(`/operaciones/${op.id}`)
+                                  recargar()
+                                } catch (e) {
+                                  setErrOp(e)
+                                }
+                              }}
+                            >
+                              Quitar
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
+          <MensajeError error={errOp} />
+          {modificar && !['TERMINADA', 'VALIDADA'].includes(o.estado) && (
+            <div className="botones" style={{ marginTop: 8 }}>
+              <button onClick={() => setEditarOp('nueva')}>+ Añadir operación</button>
+              <span className="pequeno tenue">Los cambios se aplican al plan al replanificar.</span>
+            </div>
+          )}
+          {editarOp === 'nueva' && (
+            <NuevaOperacion
+              ofId={o.id}
+              ops={o.operaciones}
+              seccionOF={o.seccion}
+              onCerrar={() => setEditarOp(null)}
+              onHecho={() => {
+                setEditarOp(null)
+                recargar()
+              }}
+            />
+          )}
+          {editarOp && editarOp !== 'nueva' && (
+            <EditarOperacion
+              op={editarOp}
+              onCerrar={() => setEditarOp(null)}
+              onHecho={() => {
+                setEditarOp(null)
+                recargar()
+              }}
+            />
+          )}
           {o.consumos && o.consumos.length > 0 && (
             <>
               <h3 style={{ marginTop: 12 }}>Consumos de material</h3>
@@ -419,7 +479,9 @@ function AccionOF({ of, accion, onCerrar, onHecho }: { of: OFDet; accion: string
   const [fechaTxt, setFechaTxt] = useState(isoLocal(new Date()))
   const [disponible, setDisponible] = useState('si')
   const [err, setErr] = useState<unknown>(null)
+  const navegar = useNavigate()
   const titulos: Record<string, string> = {
+    eliminar: `Eliminar la OF ${of.numero}`,
     bloquear: of.bloqueada ? 'Desbloquear OF' : 'Bloquear OF',
     material: 'Disponibilidad de material',
     programa: 'Registrar programa de máquina',
@@ -427,6 +489,11 @@ function AccionOF({ of, accion, onCerrar, onHecho }: { of: OFDet; accion: string
   }
   const enviar = async () => {
     try {
+      if (accion === 'eliminar') {
+        await api.del(`/ofs/${of.id}?motivo=${encodeURIComponent(motivo)}`)
+        navegar('/ofs')
+        return
+      }
       if (accion === 'programa') await api.post(`/ofs/${of.id}/programa`, { codigo })
       else if (accion === 'bloquear') await api.patch(`/ofs/${of.id}`, { bloqueada: !of.bloqueada, motivo })
       else if (accion === 'material')
@@ -443,6 +510,11 @@ function AccionOF({ of, accion, onCerrar, onHecho }: { of: OFDet; accion: string
   }
   return (
     <Modal titulo={titulos[accion]} onCerrar={onCerrar}>
+      {accion === 'eliminar' && (
+        <p>
+          Se borran la OF, sus operaciones, líneas y dependencias, y sale del plan. Si ya tiene trabajo fichado no se puede eliminar. <strong>No se puede deshacer.</strong>
+        </p>
+      )}
       {accion === 'programa' && (
         <>
           <p className="tenue">Al registrar el programa la OF pasa a «Lista para fabricar» y el plan deja de ser provisional.</p>
@@ -477,8 +549,8 @@ function AccionOF({ of, accion, onCerrar, onHecho }: { of: OFDet; accion: string
       )}
       <MensajeError error={err} />
       <div className="botones" style={{ marginTop: 10 }}>
-        <button className="primario" onClick={enviar} disabled={accion === 'programa' ? !codigo : !motivo}>
-          Guardar
+        <button className={accion === 'eliminar' ? 'peligro' : 'primario'} onClick={enviar} disabled={accion === 'programa' ? !codigo : !motivo}>
+          {accion === 'eliminar' ? 'Eliminar definitivamente' : 'Guardar'}
         </button>
         <span className="pequeno tenue">Regenere o replanifique el plan para aplicar el cambio.</span>
       </div>

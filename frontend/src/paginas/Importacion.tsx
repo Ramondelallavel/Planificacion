@@ -130,7 +130,7 @@ export default function Importacion() {
           <h1>Importar documentos de tanda</h1>
           <div className="sub">
             El PDF se procesa en segundo plano por bloques (no se carga entero en memoria). Si ya se cargó exactamente el mismo fichero no se reprocesa; si es otra versión de la misma
-            tanda se procesa como nueva versión y se conserva el histórico.
+            tanda se procesa como nueva versión y se conserva el histórico. Para varias tandas a la vez, o para eliminarlas, usa <Link to="/tandas">Tandas</Link>.
           </div>
         </div>
       </div>
@@ -179,6 +179,7 @@ export default function Importacion() {
                 <th className="num">OF</th>
                 <th className="num">Errores</th>
                 <th className="num">Advertencias</th>
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -200,6 +201,23 @@ export default function Importacion() {
                   <td className="num">{d.resumen?.ofs ?? '—'}</td>
                   <td className="num">{d.resumen ? (d.resumen.criticas ?? 0) + (d.resumen.errores ?? 0) : '—'}</td>
                   <td className="num">{d.resumen?.advertencias ?? '—'}</td>
+                  <td>
+                    {['ERROR', 'CANCELADO'].includes(d.estado) && (
+                      <button
+                        title="Borra el documento para poder volver a cargarlo"
+                        onClick={async () => {
+                          try {
+                            await api.del(`/documentos/${d.id}`)
+                            recargar()
+                          } catch (e) {
+                            setErr(e)
+                          }
+                        }}
+                      >
+                        Eliminar
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

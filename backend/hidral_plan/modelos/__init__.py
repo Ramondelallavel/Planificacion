@@ -14,6 +14,7 @@ from .fabricacion import (
     ProgramaCNC,
     Tanda,
 )
+from .materiales import EntradaMaterial, Material
 from .plan import AsignacionPlan, CambioPlan, Plan
 from .recursos import (
     Ausencia,
@@ -42,6 +43,7 @@ __all__ = [
     "Cualificacion",
     "DependenciaOF",
     "Documento",
+    "EntradaMaterial",
     "EstimacionPropuesta",
     "Festivo",
     "JornadaExtra",
@@ -49,6 +51,7 @@ __all__ = [
     "IncidenciaDatos",
     "IncidenciaProduccion",
     "LineaOF",
+    "Material",
     "Notificacion",
     "OFAparato",
     "Operacion",

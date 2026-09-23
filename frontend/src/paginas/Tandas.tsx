@@ -1,6 +1,9 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api } from '../api'
+import { api, puede } from '../api'
+import { useSesion } from '../App'
 import { Cargando, MensajeError, Riesgo, useDatos } from '../componentes/comunes'
+import SubirTandas from '../componentes/SubirTandas'
 import { horas, pct, semana } from '../formato'
 import type { Nivel } from '../tipos'
 
@@ -21,22 +24,33 @@ interface TandaFila {
 }
 
 export default function Tandas() {
-  const { datos, error } = useDatos(() => api.get<TandaFila[]>('/tandas'), [])
+  const { sesion } = useSesion()
+  const { datos: todas, error, recargar } = useDatos(() => api.get<TandaFila[]>('/tandas'), [])
+  const [archivadas, setArchivadas] = useState(false)
   if (error) return <MensajeError error={error} />
-  if (!datos) return <Cargando />
+  if (!todas) return <Cargando />
+  const nArchivadas = todas.filter((t) => t.estado !== 'ACTIVA').length
+  const datos = archivadas ? todas : todas.filter((t) => t.estado === 'ACTIVA')
   return (
     <>
       <div className="cabecera">
         <div>
           <h1>Tandas</h1>
-          <div className="sub">Una tanda no tiene un número fijo de aparatos: se muestran los que contiene realmente cada documento.</div>
+          <div className="sub">
+            Añade tandas con su PDF cuando quieras; desde cada tanda puedes cambiar su semana, sacarla del plan, archivarla o eliminarla. Una tanda no tiene un número fijo de aparatos: se
+            muestran los que contiene realmente cada documento.
+          </div>
         </div>
+        {nArchivadas > 0 && (
+          <label className="pequeno">
+            <input type="checkbox" checked={archivadas} onChange={(e) => setArchivadas(e.target.checked)} /> Ver archivadas ({nArchivadas})
+          </label>
+        )}
       </div>
+      {puede(sesion, 'importar') && <SubirTandas onCambio={recargar} />}
       <section className="panel">
         {datos.length === 0 ? (
-          <p className="tenue">
-            No hay tandas. <Link to="/importacion">Importa el PDF de una tanda</Link>.
-          </p>
+          <p className="tenue">No hay tandas activas. Añade el PDF de una tanda arriba.</p>
         ) : (
           <table>
             <thead>
@@ -59,7 +73,17 @@ export default function Tandas() {
                     <Link to={`/tandas/${t.id}`}>
                       <strong>{t.numero}</strong>
                     </Link>
-                    {!t.incluida_en_plan && <span className="etiqueta" style={{ marginLeft: 6 }}>fuera del plan</span>}
+                    {t.estado !== 'ACTIVA' ? (
+                      <span className="etiqueta" style={{ marginLeft: 6 }}>
+                        {t.estado.toLowerCase()}
+                      </span>
+                    ) : (
+                      !t.incluida_en_plan && (
+                        <span className="etiqueta" style={{ marginLeft: 6 }}>
+                          fuera del plan
+                        </span>
+                      )
+                    )}
                   </td>
                   <td>{t.producto}</td>
                   <td>{semana(t.semana)}</td>

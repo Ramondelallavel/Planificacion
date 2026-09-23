@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
-import { api } from '../api'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { api, puede } from '../api'
+import { useSesion } from '../App'
+import { NuevaOF } from '../componentes/EditorOperaciones'
 import { Cargando, MensajeError, Riesgo, useDatos } from '../componentes/comunes'
 import { fecha, horas, semana } from '../formato'
 import type { OFResumen } from '../tipos'
@@ -9,6 +11,9 @@ import { aCsv, descargar } from '../plataforma'
 export default function TablaOFs() {
   const [params, setParams] = useSearchParams()
   const [q, setQ] = useState(params.get('q') ?? '')
+  const [nueva, setNueva] = useState(false)
+  const { sesion } = useSesion()
+  const navegar = useNavigate()
   const consulta = params.toString()
   const { datos, error } = useDatos(() => api.get<{ total: number; items: OFResumen[] }>(`/ofs?limite=500&${consulta}`), [consulta])
   const filtro = (k: string, v: string) => {
@@ -73,8 +78,14 @@ export default function TablaOFs() {
           >
             Exportar CSV
           </button>
+          {puede(sesion, 'modificar_plan') && (
+            <button className="primario" onClick={() => setNueva(true)}>
+              + Nueva OF
+            </button>
+          )}
         </div>
       </div>
+      {nueva && <NuevaOF onCerrar={() => setNueva(false)} onHecho={(of) => navegar(`/ofs/${of.id}`)} />}
       <MensajeError error={error} />
       {!datos ? (
         <Cargando />

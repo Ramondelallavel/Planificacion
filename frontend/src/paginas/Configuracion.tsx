@@ -3,23 +3,7 @@ import { api, puede } from '../api'
 import { useSesion } from '../App'
 import { Cargando, MensajeError, Modal, useDatos } from '../componentes/comunes'
 import { fecha } from '../formato'
-
-interface Recurso {
-  id: number
-  codigo: string
-  nombre: string
-  tipo: string
-  seccion: string | null
-  capacidad: number
-  estado: string
-  operaciones: string[] | null
-  alias: string[] | null
-  turnos: string[] | null
-  requiere_operario: boolean
-  activo: boolean
-  fuente: string | null
-  parada_actual: { inicio: string; fin: string | null; motivo: string } | null
-}
+import type { Recurso } from '../tipos'
 
 interface Operario {
   id: number
@@ -126,6 +110,7 @@ function Recursos() {
   const { sesion } = useSesion()
   const { datos, error, recargar } = useDatos(() => api.get<Recurso[]>('/recursos'), [])
   const [editar, setEditar] = useState<Recurso | 'nuevo' | null>(null)
+  const [aviso, setAviso] = useState<string | null>(null)
   const editable = puede(sesion, 'recursos')
   return (
     <section className="panel">
@@ -177,12 +162,50 @@ function Recursos() {
                     </div>
                   )}
                 </td>
-                <td>{editable && <button onClick={() => setEditar(r)}>Editar</button>}</td>
+                <td>
+                  {editable && (
+                    <div className="botones">
+                      <button onClick={() => setEditar(r)}>Editar</button>
+                      <button
+                        title="Añadir una máquina igual"
+                        onClick={async () => {
+                          setAviso(null)
+                          try {
+                            const x = await api.post<{ nuevos: string[] }>(`/recursos/${r.id}/duplicar`, { cantidad: 1 })
+                            setAviso(`Máquina nueva ${x.nuevos.join(', ')}, igual que ${r.codigo}. Replanifica para usarla.`)
+                            recargar()
+                          } catch (e) {
+                            setAviso(e instanceof Error ? e.message : String(e))
+                          }
+                        }}
+                      >
+                        Duplicar
+                      </button>
+                      {r.activo && (
+                        <button
+                          onClick={async () => {
+                            setAviso(null)
+                            try {
+                              const x = await api.del<{ borrado: boolean; motivo?: string }>(`/recursos/${r.id}`)
+                              setAviso(x.borrado ? `${r.codigo} eliminada.` : (x.motivo ?? `${r.codigo} dada de baja.`))
+                              recargar()
+                            } catch (e) {
+                              setAviso(e instanceof Error ? e.message : String(e))
+                            }
+                          }}
+                        >
+                          Quitar
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
+      {aviso && <div className="mensaje aviso">{aviso}</div>}
       {editar && (
         <EditarRecurso
           r={editar === 'nuevo' ? null : editar}
@@ -294,6 +317,8 @@ function Operarios() {
   const { sesion } = useSesion()
   const { datos, error, recargar } = useDatos(() => api.get<Operario[]>('/operarios'), [])
   const [editar, setEditar] = useState<Operario | 'nuevo' | null>(null)
+  const [lote, setLote] = useState(false)
+  const [aviso, setAviso] = useState<string | null>(null)
   const [ausencia, setAusencia] = useState<Operario | null>(null)
   const editable = puede(sesion, 'recursos')
   return (
@@ -301,9 +326,12 @@ function Operarios() {
       <div className="cabecera">
         <h2>Operarios</h2>
         {editable && (
-          <button className="primario" onClick={() => setEditar('nuevo')}>
-            Nuevo operario
-          </button>
+          <div className="botones">
+            <button onClick={() => setLote(true)}>Alta de varios</button>
+            <button className="primario" onClick={() => setEditar('nuevo')}>
+              Nuevo operario
+            </button>
+          </div>
         )}
       </div>
       <MensajeError error={error} />
@@ -349,6 +377,22 @@ function Operarios() {
                     <div className="botones">
                       <button onClick={() => setEditar(o)}>Editar</button>
                       <button onClick={() => setAusencia(o)}>Ausencia</button>
+                      {o.activo && (
+                        <button
+                          onClick={async () => {
+                            setAviso(null)
+                            try {
+                              const x = await api.del<{ borrado: boolean; motivo?: string }>(`/operarios/${o.id}`)
+                              setAviso(x.borrado ? `${o.nombre} eliminado.` : (x.motivo ?? `${o.nombre} dado de baja.`))
+                              recargar()
+                            } catch (e) {
+                              setAviso(e instanceof Error ? e.message : String(e))
+                            }
+                          }}
+                        >
+                          Quitar
+                        </button>
+                      )}
                     </div>
                   )}
                 </td>
@@ -363,6 +407,18 @@ function Operarios() {
           onCerrar={() => setEditar(null)}
           onHecho={() => {
             setEditar(null)
+            recargar()
+          }}
+        />
+      )}
+      {aviso && <div className="mensaje aviso">{aviso}</div>}
+      {lote && datos && (
+        <AltaEnLote
+          operarios={datos}
+          onCerrar={() => setLote(false)}
+          onHecho={(t) => {
+            setLote(false)
+            setAviso(t)
             recargar()
           }}
         />
@@ -443,6 +499,88 @@ function EditarOperario({ o, onCerrar, onHecho }: { o: Operario | null; onCerrar
       <div className="botones" style={{ marginTop: 8 }}>
         <button className="primario" onClick={guardar} disabled={!f.codigo || !f.nombre}>
           Guardar
+        </button>
+        <button onClick={onCerrar}>Cancelar</button>
+      </div>
+    </Modal>
+  )
+}
+
+function AltaEnLote({ operarios, onCerrar, onHecho }: { operarios: Operario[]; onCerrar: () => void; onHecho: (t: string) => void }) {
+  const turnos = useDatos(() => api.get<Turno[]>('/turnos'), [])
+  const recursos = useDatos(() => api.get<Recurso[]>('/recursos'), [])
+  const secciones = [...new Set((recursos.datos ?? []).map((r) => r.seccion).filter(Boolean))].sort() as string[]
+  const [f, setF] = useState({ cantidad: '2', copiar: '', seccion: '', turno: '', nombre: 'Refuerzo' })
+  const [err, setErr] = useState<unknown>(null)
+  return (
+    <Modal titulo="Alta de varios operarios" onCerrar={onCerrar}>
+      <p className="pequeno tenue">Refuerzos, personal de ETT, traslados: iguales a un operario que ya sabe hacer el trabajo, o cualificados en todas las máquinas de una sección.</p>
+      <div className="formulario">
+        <label className="campo">
+          Cuántos
+          <input type="number" min={1} max={50} value={f.cantidad} onChange={(e) => setF({ ...f, cantidad: e.target.value })} />
+        </label>
+        <label className="campo">
+          Iguales a
+          <select value={f.copiar} onChange={(e) => setF({ ...f, copiar: e.target.value })}>
+            <option value="">— (por sección)</option>
+            {operarios
+              .filter((o) => o.activo)
+              .map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.codigo} · {o.nombre}
+                </option>
+              ))}
+          </select>
+        </label>
+        {!f.copiar && (
+          <label className="campo">
+            Sección
+            <select value={f.seccion} onChange={(e) => setF({ ...f, seccion: e.target.value })}>
+              <option value="">elige…</option>
+              {secciones.map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        <label className="campo">
+          Turno
+          <select value={f.turno} onChange={(e) => setF({ ...f, turno: e.target.value })}>
+            <option value="">{f.copiar ? 'el mismo' : 'elige…'}</option>
+            {(turnos.datos ?? []).map((t) => (
+              <option key={t.codigo} value={t.codigo}>
+                {t.codigo} · {t.nombre}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="campo">
+          Nombre
+          <input value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} />
+        </label>
+      </div>
+      <MensajeError error={err} />
+      <div className="botones" style={{ marginTop: 8 }}>
+        <button
+          className="primario"
+          disabled={!Number(f.cantidad) || (!f.copiar && (!f.seccion || !f.turno))}
+          onClick={async () => {
+            try {
+              const r = await api.post<{ creados: string[] }>('/operarios/lote', {
+                cantidad: Number(f.cantidad),
+                copiar_de: f.copiar ? Number(f.copiar) : null,
+                seccion: f.copiar ? null : f.seccion,
+                turno: f.turno || null,
+                nombre: f.nombre,
+              })
+              onHecho(`Alta de ${r.creados.length}: ${r.creados.join(', ')}. Replanifica para que el plan cuente con ellos.`)
+            } catch (e) {
+              setErr(e)
+            }
+          }}
+        >
+          Dar de alta
         </button>
         <button onClick={onCerrar}>Cancelar</button>
       </div>

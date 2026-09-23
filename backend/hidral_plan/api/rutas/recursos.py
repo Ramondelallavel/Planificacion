@@ -7,11 +7,29 @@ from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ... import configuracion
-from ...modelos import Ausencia, Cualificacion, Festivo, JornadaExtra, Operacion, Operario, OrdenFabricacion, ParadaRecurso, Recurso, Seccion, TiempoEstandar, Turno
+from ...modelos import (
+    AsignacionPlan,
+    Ausencia,
+    Cualificacion,
+    Festivo,
+    Fichaje,
+    IncidenciaProduccion,
+    JornadaExtra,
+    Notificacion,
+    Operacion,
+    Operario,
+    OrdenFabricacion,
+    ParadaRecurso,
+    Recurso,
+    Seccion,
+    TiempoEstandar,
+    Turno,
+    Usuario,
+)
 from ...modelos.enums import EstadoOperacion, Fuente
 from ...servicios.auditoria import auditar
 from ...servicios.operaciones import derivar_operaciones
@@ -110,6 +128,74 @@ def cambiar_recurso(rid: int, datos: RecursoIn, s: Session = Depends(get_sesion)
     return _rec(r, s)
 
 
+def _con_historia_recurso(s: Session, r: Recurso) -> str | None:
+    if s.scalar(select(Fichaje.id).where(Fichaje.recurso_id == r.id).limit(1)):
+        return "tiene fichajes"
+    if s.scalar(select(AsignacionPlan.id).where(AsignacionPlan.recurso_id == r.id).limit(1)):
+        return "aparece en planes"
+    if s.scalar(select(IncidenciaProduccion.id).where(IncidenciaProduccion.recurso_id == r.id).limit(1)):
+        return "tiene incidencias"
+    return None
+
+
+class Duplicar(BaseModel):
+    cantidad: int = 1
+    copiar_cualificaciones: bool = True
+
+
+@router.post("/recursos/{rid}/duplicar")
+def duplicar_recurso(rid: int, datos: Duplicar, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+    """Añade máquinas iguales a una existente (mismas operaciones, turnos y alias) y, si se pide,
+    cualifica en ellas a los operarios que ya lo estaban en la original."""
+    r = s.get(Recurso, rid)
+    if r is None:
+        raise HTTPException(404, "Recurso inexistente")
+    if not 1 <= datos.cantidad <= 20:
+        raise HTTPException(400, "Entre 1 y 20 máquinas de una vez")
+    base = r.codigo.rsplit("-", 1)[0] if r.codigo.rsplit("-", 1)[-1].isdigit() else r.codigo
+    existentes = set(s.scalars(select(Recurso.codigo)))
+    cualificados = list(s.scalars(select(Cualificacion).where(Cualificacion.recurso_codigo == r.codigo)))
+    nuevos = []
+    n = 2
+    for _ in range(datos.cantidad):
+        while f"{base}-{n}" in existentes:
+            n += 1
+        codigo = f"{base}-{n}"
+        existentes.add(codigo)
+        c = Recurso(
+            codigo=codigo, nombre=f"{r.nombre} ({n})", tipo=r.tipo, seccion_codigo=r.seccion_codigo, capacidad=r.capacidad, operaciones=r.operaciones,
+            alias=None, turnos=r.turnos, requiere_operario=r.requiere_operario, restricciones=r.restricciones, fuente=Fuente.USUARIO,
+        )
+        s.add(c)
+        if datos.copiar_cualificaciones:
+            for q in cualificados:
+                s.add(Cualificacion(operario_id=q.operario_id, recurso_codigo=codigo, nivel=q.nivel))
+        nuevos.append(codigo)
+    s.flush()
+    auditar(s, u.usuario, "DUPLICAR_RECURSO", "RECURSO", r.codigo, despues={"nuevos": nuevos, "operarios_cualificados": len(cualificados) if datos.copiar_cualificaciones else 0})
+    return {"nuevos": nuevos, "operarios_cualificados": len({q.operario_id for q in cualificados}) if datos.copiar_cualificaciones else 0}
+
+
+@router.delete("/recursos/{rid}")
+def eliminar_recurso(rid: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+    """Quita una máquina. Si tiene historia (fichajes, planes, incidencias) se da de baja (inactiva)
+    en vez de borrarla, para no perder la trazabilidad."""
+    r = s.get(Recurso, rid)
+    if r is None:
+        raise HTTPException(404, "Recurso inexistente")
+    motivo = _con_historia_recurso(s, r)
+    if motivo:
+        r.activo = False
+        auditar(s, u.usuario, "BAJA_RECURSO", "RECURSO", r.codigo, despues={"activo": False}, motivo=f"No se borra: {motivo}")
+        return {"codigo": r.codigo, "borrado": False, "desactivado": True, "motivo": f"{r.codigo} {motivo}: se ha dado de baja (inactiva) en vez de borrarla"}
+    s.execute(delete(Cualificacion).where(Cualificacion.recurso_codigo == r.codigo))
+    s.execute(delete(ParadaRecurso).where(ParadaRecurso.recurso_id == r.id))
+    codigo = r.codigo
+    s.delete(r)
+    auditar(s, u.usuario, "ELIMINAR_RECURSO", "RECURSO", codigo)
+    return {"codigo": codigo, "borrado": True, "desactivado": False}
+
+
 @router.get("/operarios")
 def operarios(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     ahora_ = ahora()
@@ -144,6 +230,77 @@ def crear_operario(datos: OperarioIn, s: Session = Depends(get_sesion), u: Usuar
     s.flush()
     auditar(s, u.usuario, "CREAR_OPERARIO", "OPERARIO", o.codigo_empleado, despues=datos.model_dump())
     return {"id": o.id}
+
+
+class LoteOperarios(BaseModel):
+    cantidad: int
+    copiar_de: int | None = None
+    turno: str | None = None
+    seccion: str | None = None
+    recursos: list[str] | None = None
+    operaciones: list[str] | None = None
+    nombre: str | None = None
+
+
+@router.post("/operarios/lote")
+def alta_en_lote(datos: LoteOperarios, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+    """Da de alta varios operarios iguales (p.ej. refuerzo de un equipo): mismo turno y
+    cualificaciones que uno existente, o las que se indiquen."""
+    if not 1 <= datos.cantidad <= 50:
+        raise HTTPException(400, "Entre 1 y 50 operarios de una vez")
+    modelo = s.get(Operario, datos.copiar_de) if datos.copiar_de else None
+    if datos.copiar_de and modelo is None:
+        raise HTTPException(404, "Operario de referencia inexistente")
+    turno = datos.turno or (modelo.turno_codigo if modelo else None)
+    if turno and s.get(Turno, turno) is None:
+        raise HTTPException(400, f"No existe el turno {turno}")
+    seccion = datos.seccion or (modelo.seccion_codigo if modelo else None)
+    recursos = datos.recursos if datos.recursos is not None else [c.recurso_codigo for c in (modelo.cualificaciones if modelo else []) if c.recurso_codigo]
+    tipos = datos.operaciones if datos.operaciones is not None else [c.tipo_operacion for c in (modelo.cualificaciones if modelo else []) if c.tipo_operacion]
+    if not recursos and not tipos and seccion:
+        recursos = list(s.scalars(select(Recurso.codigo).where(Recurso.seccion_codigo == seccion, Recurso.activo.is_(True), Recurso.tipo != "PROGRAMACION")))
+    if not recursos and not tipos:
+        raise HTTPException(400, "Indica en qué máquinas o secciones pueden trabajar")
+    existentes = set(s.scalars(select(Operario.codigo_empleado)))
+    n = len(existentes) + 1
+    nombre = (datos.nombre or f"Refuerzo {seccion or ''}").strip()
+    creados = []
+    for i in range(datos.cantidad):
+        while f"N{n:03d}" in existentes:
+            n += 1
+        codigo = f"N{n:03d}"
+        existentes.add(codigo)
+        o = Operario(codigo_empleado=codigo, nombre=f"{nombre} {i + 1}" if datos.cantidad > 1 else nombre, turno_codigo=turno, seccion_codigo=seccion)
+        o.cualificaciones = [Cualificacion(recurso_codigo=r) for r in recursos] + [Cualificacion(tipo_operacion=t) for t in tipos]
+        s.add(o)
+        creados.append(codigo)
+    s.flush()
+    auditar(s, u.usuario, "ALTA_OPERARIOS", "OPERARIO", ",".join(creados)[:64], despues={"turno": turno, "seccion": seccion, "recursos": recursos, "operaciones": tipos, "cantidad": len(creados)})
+    return {"creados": creados, "turno": turno, "recursos": recursos}
+
+
+@router.delete("/operarios/{oid}")
+def eliminar_operario(oid: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+    """Quita un operario; si ya tiene historia (fichajes, planes, usuario) se da de baja en vez de borrarlo."""
+    o = s.get(Operario, oid)
+    if o is None:
+        raise HTTPException(404, "Operario inexistente")
+    historia = (
+        s.scalar(select(Fichaje.id).where(Fichaje.operario_id == o.id).limit(1))
+        or s.scalar(select(AsignacionPlan.id).where(AsignacionPlan.operario_id == o.id).limit(1))
+        or s.scalar(select(Usuario.id).where(Usuario.operario_id == o.id).limit(1))
+        or s.scalar(select(IncidenciaProduccion.id).where(IncidenciaProduccion.operario_id == o.id).limit(1))
+    )
+    if historia:
+        o.activo = False
+        auditar(s, u.usuario, "BAJA_OPERARIO", "OPERARIO", o.codigo_empleado, despues={"activo": False}, motivo="Tiene historia: se da de baja en vez de borrarlo")
+        return {"codigo": o.codigo_empleado, "borrado": False, "desactivado": True, "motivo": f"{o.nombre} ya tiene trabajo o planes registrados: se ha dado de baja (inactivo) en vez de borrarlo"}
+    s.execute(delete(Notificacion).where(Notificacion.operario_id == o.id))
+    s.execute(delete(Ausencia).where(Ausencia.operario_id == o.id))
+    codigo = o.codigo_empleado
+    s.delete(o)
+    auditar(s, u.usuario, "ELIMINAR_OPERARIO", "OPERARIO", codigo)
+    return {"codigo": codigo, "borrado": True, "desactivado": False}
 
 
 @router.patch("/operarios/{oid}")

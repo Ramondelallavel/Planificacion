@@ -4,7 +4,8 @@
 
 ```
                  ┌──────────────────────── Interfaz web (React) ────────────────────────┐
-                 │ Control Tower · Gantt · Plan por turno · Capacidad · Seguimiento      │
+                 │ Control Tower · Gantt · Plan por turno · Capacidad · Carga · Materiales│
+                 │ Seguimiento                                                           │
                  │ Incidencias · Simulación · Tandas/Aparatos/OF · Importación           │
                  │ Configuración · Auditoría · Operario · Avisos · Búsqueda (Ctrl+K)     │
                  └───────────────────────────────┬──────────────────────────────────────┘
@@ -166,6 +167,30 @@ si no, abre toda la fábrica. El Gantt sombrea esos turnos y el mapa de capacida
 Además de una OF suelta, se pueden marcar urgentes de una vez todas las OF abiertas de una tanda o
 de un aparato (`POST /api/prioridad`, auditado). Como con cualquier urgencia, el plan cambia al
 replanificar.
+
+### Carga de trabajo (`servicios/carga.py`)
+- **Rendimiento por equipo**: parámetro `rendimiento_secciones` (% sobre los tiempos estándar). La
+  instantánea divide la duración de cada operación entre ese factor; los tiempos estándar no cambian.
+- **Operaciones y OF a mano**: editar duración, máquina o sección de una operación, añadir o quitar
+  operaciones y crear OF sin PDF (tanda `VARIOS` si no se indica otra). Quedan con fuente `USUARIO`
+  y el recálculo de tiempos estándar no las toca.
+- **Mover carga**: pasa operaciones pendientes de una máquina o sección a otra (filtros por tipo y
+  tanda, vista previa con `aplicar=false`); solo se mueven las que la máquina destino sabe hacer.
+- **Resumen por equipo**: demanda pendiente frente a capacidad de máquinas (ventanas × unidades) y de
+  personas (ventanas de los cualificados, repartidas si lo están en varias secciones).
+
+### Materiales (`servicios/materiales.py`)
+Necesidad de cada OF abierta = sus «Consumidos» más sus componentes de compra del PDF. Para cada
+material controlado (con stock registrado) se reparte stock y después entradas previstas por orden
+de necesidad (inicio en el plan activo). Cada OF queda con material, con material desde la fecha de
+la entrada que la cubre (el motor no la empieza antes) o bloqueada por falta; con plazo de reposición
+configurado se supone disponible pasado ese plazo. Los materiales no controlados no cambian nada.
+
+### Gestión de tandas (`servicios/tandas.py`)
+Eliminar una tanda borra aparatos, bultos, OF, operaciones, líneas, dependencias y asignaciones en
+cualquier plan, y el documento si ya no lo usa nada más (el mismo PDF se puede volver a importar);
+después se regenera el plan. Con trabajo fichado no se elimina: se archiva (fuera del plan y de las
+listas, reactivable).
 
 ### Cambios manuales (`servicio.py`)
 Mover o reasignar una operación pasa por `restricciones.validar_asignacion`: si viola una

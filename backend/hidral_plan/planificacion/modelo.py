@@ -243,6 +243,8 @@ def cargar_instantanea(s: Session, ahora: datetime, tanda_ids: list[int] | None 
         for j in s.scalars(select(JornadaExtra).where(JornadaExtra.fecha >= ahora.date() - timedelta(days=1), JornadaExtra.fecha <= horizonte.date()).order_by(JornadaExtra.fecha))
     ]
 
+    rendimiento = {k: float(v) for k, v in (cfg.get("rendimiento_secciones") or {}).items() if v and float(v) > 0}
+
     q_tandas = select(Tanda).where(Tanda.estado == "ACTIVA", Tanda.incluida_en_plan.is_(True))
     if tanda_ids:
         q_tandas = select(Tanda).where(Tanda.id.in_(tanda_ids))
@@ -285,7 +287,7 @@ def cargar_instantanea(s: Session, ahora: datetime, tanda_ids: list[int] | None 
             of_numero=of.numero,
             tipo=op.tipo,
             seccion=op.seccion_codigo,
-            duracion=op.duracion_estimada_min,
+            duracion=(op.duracion_estimada_min * 100 / rendimiento[op.seccion_codigo]) if op.duracion_estimada_min is not None and op.seccion_codigo in rendimiento else op.duracion_estimada_min,
             estado=op.estado,
             secuencia=op.secuencia,
             recurso_preferido=op.recurso_preferido,

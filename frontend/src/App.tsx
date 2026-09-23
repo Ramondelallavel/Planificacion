@@ -10,6 +10,8 @@ import { guardarEnNube } from './plataforma'
 import Aparato from './paginas/Aparato'
 import Asistente from './paginas/Asistente'
 import Capacidad from './paginas/Capacidad'
+import Carga from './paginas/Carga'
+import Materiales from './paginas/Materiales'
 import Auditoria from './paginas/Auditoria'
 import Configuracion from './paginas/Configuracion'
 import ControlTower from './paginas/ControlTower'
@@ -116,6 +118,7 @@ export default function App() {
                   <NavLink to="/gantt">Plan · Gantt</NavLink>
                   <NavLink to="/turnos">Plan por turno</NavLink>
                   <NavLink to="/capacidad">Capacidad</NavLink>
+                  <NavLink to="/carga">Carga de trabajo</NavLink>
                   <NavLink to="/seguimiento">Seguimiento</NavLink>
                   <NavLink to="/incidencias">Incidencias</NavLink>
                   <NavLink to="/simulacion">Simulación / OF urgente</NavLink>
@@ -123,6 +126,7 @@ export default function App() {
                   <div className="seccion-nav">Fabricación</div>
                   <NavLink to="/tandas">Tandas y aparatos</NavLink>
                   <NavLink to="/ofs">Órdenes de fabricación</NavLink>
+                  <NavLink to="/materiales">Materiales</NavLink>
                   <NavLink to="/importacion">Importar documentos</NavLink>
                 </>
               )}
@@ -157,6 +161,8 @@ export default function App() {
                   <Route path="/gantt" element={<PlanGantt />} />
                   <Route path="/turnos" element={<PlanTurnos />} />
                   <Route path="/capacidad" element={<Capacidad />} />
+                  <Route path="/carga" element={<Carga />} />
+                  <Route path="/materiales" element={<Materiales />} />
                   <Route path="/seguimiento" element={<Seguimiento />} />
                   <Route path="/incidencias" element={<Incidencias />} />
                   <Route path="/simulacion" element={<Simulacion />} />

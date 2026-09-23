@@ -41,14 +41,16 @@ Principios que el código respeta en todo momento:
 | **Plan · Gantt** | Por máquina, por tanda/OF o por operario; zoom hora/turno/día/semana; turnos y jornadas extra sombreados, límites de semana de fabricación; filtros por tanda, aparato, riesgo y texto; resaltar la cadena de dependencias de una OF; arrastrar para mover (validado por el motor de restricciones); exportar a CSV |
 | **Plan por turno** | Lo que toca a cada máquina y operario turno a turno |
 | **Capacidad** | Mapa de calor ocupación/capacidad por máquina y día (turnos, festivos, jornadas extra, paradas) y las máquinas más cargadas; clic en una celda para ver qué hay planificado |
+| **Carga de trabajo** | Horas pendientes de cada equipo (sección) frente a la capacidad de sus máquinas y su gente; rendimiento del equipo en % sobre los tiempos estándar; mover carga entre máquinas o equipos (con vista previa); añadir gente o máquinas; nueva OF a mano |
+| **Materiales** | Lo que consumen las OF abiertas (consumos y componentes de compra de los PDF) frente a stock y entradas previstas; importar stock en CSV; «Aplicar al plan» bloquea las OF sin material o las retrasa hasta la entrada que las cubre |
 | **Seguimiento** | Plan frente a real: adherencia, trabajos en curso y si exceden su tiempo, pendientes que ya debían estar, desviación real/previsto por sección y operación (CSV) |
 | **Incidencias** | Averías, faltas de material, calidad…; replanifican solo la zona afectada |
 | **Simulación** | «¿Qué pasa si…?» (averías, falta de personal, turnos extra, máquinas extra, adelantar OF) sobre una copia; «Aplicar y replanificar» hace reales las decisiones (turnos extra, urgencias, pesos); OF urgente con aceptación; **comparador** de simulaciones guardadas frente al plan actual |
 | **Asistente (Claude)** | Solo en la edición publicada en claude.ai: preguntas en lenguaje natural que Claude responde consultando los datos de la aplicación y simulando sobre copias; nunca cambia el plan |
-| **Tandas, aparatos y OF** | Estructura completa con trazabilidad a la página del PDF; priorizar de una vez todas las OF de una tanda o de un aparato |
+| **Tandas, aparatos y OF** | Añadir tandas arrastrando uno o varios PDF (y replanificar con ellas); editar producto y semana de fabricación de tanda o aparato; sacar del plan, archivar o eliminar una tanda (con su PDF, que se puede volver a importar); priorizar todas las OF de una tanda o aparato; editar, añadir o quitar operaciones de una OF; crear y eliminar OF a mano |
 | **Importar documentos** | Carga de tandas en PDF procesadas por bloques, con progreso e incidencias de datos |
 | **Pantalla de operario** | Mi trabajo, iniciar/pausar/terminar, avisos de cambios de plan, incidencias |
-| **Configuración** | Máquinas, secciones, operarios y cualificaciones, turnos, **calendario** (festivos y jornadas extra por sección), tiempos estándar y aprendizaje, pesos de prioridad |
+| **Configuración** | Máquinas (duplicar, dar de baja), secciones, operarios (alta de varios a la vez, baja) y cualificaciones, turnos, **calendario** (festivos y jornadas extra por sección), tiempos estándar y aprendizaje, pesos de prioridad |
 | **Auditoría** | Quién cambió qué, cuándo, antes/después y por qué |
 
 En toda la aplicación: búsqueda global (Ctrl+K) de OF, tandas, aparatos, artículos, máquinas y

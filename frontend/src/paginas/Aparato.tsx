@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, puede } from '../api'
 import { useSesion } from '../App'
 import { Cargando, MensajeError, Riesgo, useDatos } from '../componentes/comunes'
+import { CambiarSemana } from '../componentes/GestionTanda'
 import Priorizar from '../componentes/Priorizar'
 import { fecha, horas, semana } from '../formato'
 import type { Nivel, OFResumen } from '../tipos'
@@ -50,6 +52,7 @@ export default function Aparato() {
   const id = Number(useParams().id)
   const { sesion } = useSesion()
   const { datos: a, error, recargar } = useDatos(() => api.get<ApDet>(`/aparatos/${id}`), [id])
+  const [semanaAbierta, setSemanaAbierta] = useState(false)
   if (error) return <MensajeError error={error} />
   if (!a) return <Cargando />
   const principales = a.bultos.filter((b) => !b.padre_id)
@@ -67,10 +70,29 @@ export default function Aparato() {
             <Link to={`/tandas/${a.tanda_id}`}>ver tanda</Link>
           </div>
         </div>
+        <div className="acciones-cabecera">
+          {puede(sesion, 'planificar') && (
+            <div className="botones">
+              <button onClick={() => setSemanaAbierta(true)}>Cambiar semana</button>
+            </div>
+          )}
         {puede(sesion, 'modificar_plan') && (
           <Priorizar aparato_id={id} urgentes={a.ofs.filter((o) => o.urgente && !['TERMINADA', 'VALIDADA'].includes(o.estado)).length} total={a.ofs.filter((o) => !['TERMINADA', 'VALIDADA'].includes(o.estado)).length} onCambio={recargar} />
         )}
+        </div>
       </div>
+      {semanaAbierta && (
+        <CambiarSemana
+          titulo={`Semana del aparato ${a.referencia}`}
+          actual={a.semana}
+          ruta={`/aparatos/${a.id}`}
+          onCerrar={() => setSemanaAbierta(false)}
+          onHecho={() => {
+            setSemanaAbierta(false)
+            recargar()
+          }}
+        />
+      )}
       {a.motivos && (
         <div className="mensaje aviso">
           <ul>

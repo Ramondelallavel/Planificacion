@@ -2,7 +2,7 @@
 
 ```bash
 cd backend
-python -m pytest                        # 54 pruebas; SQLite temporal por prueba
+python -m pytest                        # 65 pruebas; SQLite temporal por prueba
 HIDRAL_TEST_DB_URL=postgresql+psycopg://usuario@host/bd_pruebas python -m pytest   # misma batería en PostgreSQL (vacía esa base)
 ```
 
@@ -81,6 +81,22 @@ Se ejecutan si `backend/tests/fixtures/07_Tanda_EH-2210_OrdenesFab.pdf` existe (
 | `test_simular_turno_extra_y_aplicarlo` | simular un turno extra no crea nada real; aplicarlo crea la jornada extra y un plan nuevo |
 | `test_los_supuestos_no_se_aplican` | averías, ausencias o retrasos de un escenario no se pueden «aplicar»: se registran como incidencia |
 
+## Gestión: tandas, carga, recursos y materiales (`tests/test_gestion.py`)
+
+| Prueba | Qué se comprueba |
+|---|---|
+| `test_eliminar_tanda_y_volver_a_importarla` | eliminar una tanda borra sus OF, operaciones, líneas, asignaciones y su PDF sin dejar huérfanos, no toca la otra tanda, regenera el plan, queda auditado; el mismo PDF se vuelve a importar |
+| `test_tanda_con_trabajo_fichado_se_archiva` | con trabajo fichado no se elimina (409); archivada sale del plan; reactivarla la devuelve |
+| `test_cambiar_semana_de_tanda_y_de_aparato` | la semana de la tanda arrastra aparatos y OF; la de un aparato solo sus OF; formato validado |
+| `test_eliminar_documento_sin_tanda` | un PDF ilegible se puede borrar; uno con tanda no |
+| `test_editar_anadir_y_quitar_operaciones` | duración y máquina validadas; el recálculo de tiempos estándar no pisa lo manual; operación intercalada y renumerada; quitarla; sin permiso, 403 |
+| `test_of_a_mano_entra_en_el_plan_y_se_puede_borrar` | OF sin PDF en la tanda VARIOS o en una existente, número duplicado rechazado, planificada en la máquina indicada, eliminable |
+| `test_mover_carga_entre_maquinas_y_rendimiento` | rendimiento del 125 % reduce la carga un 20 %; vista previa y movimiento de carga entre máquinas; el plan deja de usar la máquina de origen |
+| `test_duplicar_y_quitar_maquinas` | duplicar suma capacidad y copia cualificaciones; una máquina sin historia se borra, una usada en planes se da de baja |
+| `test_alta_de_operarios_en_lote_y_bajas` | alta de varios iguales a uno existente o por sección; validaciones; baja en vez de borrado si tiene usuario |
+| `test_materiales_bloquean_y_liberan_ofs` | con stock para una sola OF la otra queda bloqueada; una entrada prevista la planifica desde su llegada; recibirla cubre las dos; dejar de controlar devuelve «sin dato» |
+| `test_importar_stock_csv` | CSV con decimales españoles y filas erróneas |
+
 ## Edición navegador (`tests/test_navegador.py`)
 
 | Prueba | Qué se comprueba |
@@ -96,7 +112,7 @@ ocupación y seguridad (hash de contraseñas y tokens).
 
 ## Resultados de referencia
 
-- 54 pruebas superadas en SQLite y en PostgreSQL 16.
+- 65 pruebas superadas en SQLite y en PostgreSQL 16.
 - Tanda 2210: 99 páginas en 2 bloques (~1,6 s en el entorno de pruebas), 130 OF con hoja propia más
   9 referenciadas sin hoja, 970 líneas, 2 aparatos, 36 bultos, 149 dependencias, 0 ciclos. Con la fábrica de
   ejemplo: 140 operaciones planificadas y 8 no planificables, todas explicadas (sección `PLPINO`

@@ -1151,3 +1151,30 @@ tr.fila-elegida { background: color-mix(in srgb, var(--acento) 10%, transparent)
 /* ---------- prioridad manual ---------- */
 .priorizar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; max-width: 460px; }
 .priorizar > div { width: 100%; text-align: right; }
+
+/* ---------- tandas: subida y gestión ---------- */
+.zona-subida { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 18px; border: 2px dashed var(--borde); border-radius: var(--radio); cursor: pointer; text-align: center; }
+.zona-subida.activa, .zona-subida:hover { border-color: var(--acento); }
+table.subidas { margin-top: 10px; }
+.progreso.fino { height: 6px; margin-top: 4px; }
+.acciones-cabecera { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.gestion-tanda .botones { justify-content: flex-end; }
+
+/* ---------- carga de trabajo ---------- */
+.barra-carga { position: relative; height: 22px; border-radius: 6px; background: var(--fondo); border: 1px solid var(--borde); overflow: hidden; }
+.barra-carga > div { position: absolute; inset: 0 auto 0 0; background: var(--verde); opacity: .35; }
+.barra-carga.AMARILLO > div { background: var(--amarillo); }
+.barra-carga.NARANJA > div { background: var(--naranja); }
+.barra-carga.ROJO > div { background: var(--rojo); }
+.barra-carga > span { position: relative; padding-left: 8px; line-height: 20px; font-weight: 600; font-size: 13px; }
+.tabla-carga td { vertical-align: top; }
+tr.detalle-equipo > td { background: var(--fondo); }
+tr.detalle-equipo h3 { margin: 4px 0 6px; font-size: 14px; }
+.rendimiento input { width: 64px; text-align: right; }
+.fila-op { align-items: end; border-top: 1px dashed var(--borde); padding-top: 6px; margin-top: 6px; }
+
+/* ---------- materiales ---------- */
+tr.tenue-suave td { color: var(--texto-2); }
+.entrada-material { white-space: nowrap; }
+label.boton { display: inline-flex; align-items: center; cursor: pointer; }
+.tabla-carga td:last-child .botones { flex-wrap: nowrap; }
