@@ -47,7 +47,7 @@ export default function Login({ onEntrar }: { onEntrar: (s: Sesion) => void }) {
         <MensajeError error={error} />
         {NAVEGADOR && (
           <div style={{ marginTop: 14 }}>
-            <p className="pequeno tenue">Instalación en este navegador con usuarios de ejemplo (clave «hidral»). Entra con un clic como:</p>
+            <p className="pequeno tenue">Usuarios de ejemplo (clave «hidral» mientras no se cambie). Entra con un clic como:</p>
             <div className="botones">
               {USUARIOS_EJEMPLO.map(([u, nombre]) => (
                 <button
@@ -71,7 +71,7 @@ export default function Login({ onEntrar }: { onEntrar: (s: Sesion) => void }) {
             </div>
           </div>
         )}
-        <button className="primario" style={{ marginTop: 14, width: '100%', justifyContent: 'center' }} disabled={enviando || !usuario}>
+        <button type="submit" className="primario" style={{ marginTop: 14, width: '100%', justifyContent: 'center' }} disabled={enviando || !usuario}>
           Entrar
         </button>
       </form>

@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from fastapi import Depends, Header, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import ajustes
 from ..db import fabrica_sesiones
+from ..modelos import Usuario
 from ..seguridad import leer_token, tiene_permiso
 
 
@@ -34,19 +36,32 @@ class UsuarioActual:
         return tiene_permiso(self.rol, permiso)
 
 
-def usuario_actual(authorization: str | None = Header(default=None)) -> UsuarioActual:
+def usuario_actual(authorization: str | None = Header(default=None), s: Session = Depends(get_sesion)) -> UsuarioActual:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Falta el token de acceso")
     datos = leer_token(authorization.split(" ", 1)[1])
     if datos is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token inválido o caducado")
-    return UsuarioActual(datos["u"], datos["r"], datos.get("o"))
+    # el token no basta: un usuario dado de baja o con otro rol deja de valer al momento
+    u = s.scalar(select(Usuario).where(Usuario.usuario == datos["u"]))
+    if u is None or not u.activo:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Usuario inexistente o dado de baja")
+    return UsuarioActual(u.usuario, u.rol, u.operario_id)
 
 
 def requiere(permiso: str):
     def dep(u: UsuarioActual = Depends(usuario_actual)) -> UsuarioActual:
         if not u.puede(permiso):
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"El rol {u.rol} no tiene permiso '{permiso}'")
+        return u
+
+    return dep
+
+
+def requiere_alguno(*permisos: str):
+    def dep(u: UsuarioActual = Depends(usuario_actual)) -> UsuarioActual:
+        if not any(u.puede(p) for p in permisos):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"El rol {u.rol} no tiene permiso para esto")
         return u
 
     return dep

@@ -30,7 +30,7 @@ Principios que el código respeta en todo momento:
 | `backend/config/fabrica_ejemplo.yaml` | Configuración de fábrica **de ejemplo** (ver aviso abajo) |
 | `backend/tests` | Casos obligatorios A–P, PDF real, unitarios y API |
 | `frontend` | Interfaz web (React + TypeScript): Control Tower, Gantt, operario, simulación… |
-| `docs` | [Arquitectura](docs/ARQUITECTURA.md) · [Formato del PDF de tanda](docs/FORMATO_PDF_TANDA.md) · [Modelo de datos](docs/MODELO_DATOS.md) · [Casos de prueba](docs/CASOS_PRUEBA.md) |
+| `docs` | [Arquitectura](docs/ARQUITECTURA.md) · [Formato del PDF de tanda](docs/FORMATO_PDF_TANDA.md) · [Modelo de datos](docs/MODELO_DATOS.md) · [Casos de prueba](docs/CASOS_PRUEBA.md) · [Auditoría](docs/AUDITORIA.md) |
 
 ## Qué se puede hacer
 
@@ -133,7 +133,8 @@ En desarrollo el trabajador de documentos corre en un hilo de la propia API
 |---|---|---|
 | `HIDRAL_DB_URL` | SQLite en `backend/datos/hidral.db` | `postgresql+psycopg://usuario:clave@host/bd` en producción |
 | `HIDRAL_ALMACEN_DIR` | `backend/datos/almacen` | PDF originales (por SHA-256); compartido entre API y trabajadores |
-| `HIDRAL_SECRETO` | `cambiar-en-produccion` | Firma de sesiones. **Obligatorio cambiarlo** |
+| `HIDRAL_SECRETO` | aleatorio, guardado en `datos/.secreto` | Firma de sesiones. En producción, fíjalo (y compártelo entre réplicas) |
+| `HIDRAL_MAX_PDF_MB` / `HIDRAL_MAX_CSV_MB` | `300` / `10` | Tamaño máximo de un PDF subido y de un CSV importado |
 | `HIDRAL_TOKEN_HORAS` | `12` | Duración de la sesión |
 | `HIDRAL_BLOQUE_MIN` / `_MAX` / `_MEMORIA_MB` | `5` / `50` / `64` | Límites del tamaño adaptativo de bloque |
 | `HIDRAL_OCR` | `auto` | `auto`: OCR solo en páginas sin texto · `off`: nunca |
@@ -159,6 +160,20 @@ Los tests con el PDF real (`tests/test_pdf_real.py`) se omiten si el fichero no 
 `backend/tests/fixtures/` (no se versiona porque contiene datos de cliente); ver
 [docs/CASOS_PRUEBA.md](docs/CASOS_PRUEBA.md).
 
+## Seguridad
+
+- Contraseñas con PBKDF2-SHA256; sesiones firmadas con un secreto que nunca es un valor conocido
+  (el de `HIDRAL_SECRETO` o uno aleatorio por instalación).
+- Cada petición comprueba que el usuario sigue activo y con qué rol: una baja o un cambio de rol
+  valen al momento, sin esperar a que caduque la sesión.
+- Tras 5 intentos fallidos una cuenta queda bloqueada 15 minutos (queda en la auditoría).
+- Cada cual cambia su contraseña desde el menú; el administrador gestiona usuarios y roles en
+  Configuración → Usuarios y accesos (no se puede quitar el último administrador).
+- Los usuarios de ejemplo (clave `hidral`) son solo para demostración: cámbiales la clave o dalos de
+  baja antes de usar la aplicación con datos reales.
+
+Ver el informe de la última auditoría en [docs/AUDITORIA.md](docs/AUDITORIA.md).
+
 ## Límites conocidos de esta versión
 
 - **Formatos de hoja**: los parsers se han construido y validado con la tanda de ejemplo 2210
@@ -172,5 +187,6 @@ Los tests con el PDF real (`tests/test_pdf_real.py`) se omiten si el fichero no 
   comentarios de «Pedir un cambio» y, solo cuando alguien usa el Asistente, los datos que Claude
   consulta para responder (resúmenes del plan, OF, capacidad, seguimiento). El Asistente no
   escribe en el plan: como mucho guarda simulaciones, que no lo modifican.
-- **Esquema de base de datos**: se crea al arrancar (`create_all`). No hay migraciones
-  versionadas (Alembic); un cambio de esquema en una instalación con datos requiere migración manual.
+- **Esquema de base de datos**: se crea al arrancar y se añaden solas las tablas y columnas nuevas
+  (así la base guardada en el navegador sigue valiendo con cada versión). Renombrar o cambiar el
+  tipo de una columna sí requeriría una migración manual (no hay Alembic).

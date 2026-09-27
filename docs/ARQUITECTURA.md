@@ -223,7 +223,14 @@ Los adaptadores actuales leen exportaciones CSV (`AdaptadorCSV`, con mapeo de co
 
 ## 6. Seguridad y auditoría
 
-- Contraseñas con PBKDF2-SHA256; sesión con token firmado HMAC (`HIDRAL_SECRETO`) y caducidad.
+- Contraseñas con PBKDF2-SHA256; sesión con token firmado HMAC y caducidad. El secreto es
+  `HIDRAL_SECRETO` o, si no se define, uno aleatorio guardado junto a los datos (nunca un valor fijo).
+- Cada petición vuelve a leer el usuario: si está de baja, la sesión deja de valer; el rol que cuenta
+  es el actual, no el del token.
+- Inicio de sesión: 5 intentos fallidos en 15 minutos bloquean la cuenta ese tiempo (se cuentan en la
+  auditoría). Gestión de usuarios (`/api/usuarios`, solo administrador) y cambio de la propia clave.
+- Subidas limitadas (`HIDRAL_MAX_PDF_MB`, `HIDRAL_MAX_CSV_MB`); parámetros, turnos, ausencias e
+  incidencias se validan antes de guardarse para que nada mal formado llegue al motor.
 - Roles y permisos (`seguridad.py`):
 
 | Rol | Permisos |
@@ -239,6 +246,10 @@ Los adaptadores actuales leen exportaciones CSV (`AdaptadorCSV`, con mapeo de co
   configuración, aprendizaje) registra usuario, fecha, acción, entidad, antes, después, motivo y si
   fue automática.
 - **Parámetros versionados**: cada cambio de `ParametroConfig` incrementa su versión y se audita.
+- **Avisos**: van a un rol o a todos los mandos (`MANDOS`); cada cual ve y marca solo los suyos.
+- **Retención de planes** (`retencion_planes`): se guardan el plan activo, los definitivos, los 15
+  oficiales archivados y las 30 simulaciones más recientes; lo anterior se borra al replanificar.
+- **Esquema**: `crear_tablas` añade las columnas nuevas a tablas existentes (`db.migrar_columnas`).
 
 ## 7. Edición navegador y asistente
 

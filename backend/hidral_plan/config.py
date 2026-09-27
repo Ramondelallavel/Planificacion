@@ -9,10 +9,30 @@ desde la configuración de fábrica (ver semilla.py).
 from __future__ import annotations
 
 import os
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _secreto() -> str:
+    """HIDRAL_SECRETO si está definido. Si no, uno aleatorio guardado junto a los datos (nunca un
+    valor fijo conocido: con él cualquiera podría fabricar tokens de acceso)."""
+    if os.environ.get("HIDRAL_SECRETO"):
+        return os.environ["HIDRAL_SECRETO"]
+    datos = Path(os.environ.get("HIDRAL_ALMACEN_DIR", str(BASE_DIR / "datos" / "almacen"))).parent
+    fichero = datos / ".secreto"
+    try:
+        if fichero.exists() and len(fichero.read_text().strip()) >= 32:
+            return fichero.read_text().strip()
+        datos.mkdir(parents=True, exist_ok=True)
+        valor = secrets.token_hex(32)
+        fichero.write_text(valor)
+        fichero.chmod(0o600)
+        return valor
+    except OSError:
+        return secrets.token_hex(32)  # sin disco escribible: válido mientras dure el proceso
 
 
 def _bool(nombre: str, defecto: bool) -> bool:
@@ -26,13 +46,18 @@ def _bool(nombre: str, defecto: bool) -> bool:
 class Ajustes:
     db_url: str = field(default_factory=lambda: os.environ.get("HIDRAL_DB_URL", f"sqlite:///{BASE_DIR / 'datos' / 'hidral.db'}"))
     almacen_dir: Path = field(default_factory=lambda: Path(os.environ.get("HIDRAL_ALMACEN_DIR", str(BASE_DIR / "datos" / "almacen"))))
-    secreto: str = field(default_factory=lambda: os.environ.get("HIDRAL_SECRETO", "cambiar-en-produccion"))
+    secreto: str = field(default_factory=_secreto)
     token_horas: int = field(default_factory=lambda: int(os.environ.get("HIDRAL_TOKEN_HORAS", "12")))
     # Procesamiento documental
     bloque_min_paginas: int = field(default_factory=lambda: int(os.environ.get("HIDRAL_BLOQUE_MIN", "5")))
     bloque_max_paginas: int = field(default_factory=lambda: int(os.environ.get("HIDRAL_BLOQUE_MAX", "50")))
     # Presupuesto de memoria orientativo (MB) que el pipeline intenta no superar por bloque.
     bloque_memoria_mb: int = field(default_factory=lambda: int(os.environ.get("HIDRAL_BLOQUE_MEMORIA_MB", "64")))
+    # Tamaño máximo de un PDF subido y de un CSV importado
+    max_pdf_mb: int = field(default_factory=lambda: int(os.environ.get("HIDRAL_MAX_PDF_MB", "300")))
+    max_csv_mb: int = field(default_factory=lambda: int(os.environ.get("HIDRAL_MAX_CSV_MB", "10")))
+    # El texto de las páginas se guarda para auditoría; con esto, sin correos ni teléfonos
+    ocultar_datos_personales: bool = field(default_factory=lambda: _bool("HIDRAL_OCULTAR_DATOS_PERSONALES", True))
     ocr: str = field(default_factory=lambda: os.environ.get("HIDRAL_OCR", "auto"))  # auto | off
     # Trabajador de la cola: en desarrollo corre en un hilo del propio proceso de la API.
     worker_en_proceso: bool = field(default_factory=lambda: _bool("HIDRAL_WORKER_EN_PROCESO", True))

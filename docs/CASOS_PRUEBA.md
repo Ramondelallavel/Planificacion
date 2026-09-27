@@ -2,7 +2,7 @@
 
 ```bash
 cd backend
-python -m pytest                        # 65 pruebas; SQLite temporal por prueba
+python -m pytest                        # 93 pruebas; SQLite temporal por prueba
 HIDRAL_TEST_DB_URL=postgresql+psycopg://usuario@host/bd_pruebas python -m pytest   # misma batería en PostgreSQL (vacía esa base)
 ```
 
@@ -97,6 +97,35 @@ Se ejecutan si `backend/tests/fixtures/07_Tanda_EH-2210_OrdenesFab.pdf` existe (
 | `test_materiales_bloquean_y_liberan_ofs` | con stock para una sola OF la otra queda bloqueada; una entrada prevista la planifica desde su llegada; recibirla cubre las dos; dejar de controlar devuelve «sin dato» |
 | `test_importar_stock_csv` | CSV con decimales españoles y filas erróneas |
 
+## Auditoría (`tests/test_auditoria.py`)
+
+Zonas que no cubría ninguna otra prueba y las protecciones añadidas tras la auditoría
+([AUDITORIA.md](AUDITORIA.md)):
+
+| Prueba | Qué se comprueba |
+|---|---|
+| `test_incidencias_de_produccion_por_api` | avería con replanificación, aviso a los mandos, cierre que devuelve la máquina a operativa; ausencia, falta de material y retraso; datos obligatorios por tipo |
+| `test_incidencia_desde_pantalla_de_operario` | incidencia de calidad desde la pantalla del operario |
+| `test_fichajes_pausa_reanudar_parcial_y_ajenos` | inicio autorizado, pausa, reanudación y fin; otro operario no puede tocar el fichaje |
+| `test_escenarios_what_if` (8 casos) | ausencias, falta de personal, de material, retrasos, máquinas extra, pesos, adelantar OF y avería incremental |
+| `test_of_urgente_simular_y_decidir` | rechazar deja el plan; aceptar marca la OF urgente |
+| `test_mover_y_bloquear_asignacion` | bloqueo; un movimiento a domingo de madrugada se rechaza; histórico y cambios |
+| `test_documento_paginas_incidencias_y_trazabilidad` | páginas, imagen PNG, revisión de incidencias de datos, OF del documento y trazabilidad |
+| `test_configuracion_turnos_secciones_tiempos_y_parametros` | horas y días de turno imposibles, parámetros mal formados y ausencias al revés se rechazan; el plan se sigue generando |
+| `test_usuario_de_consulta_no_cambia_nada` | un usuario de consulta no crea incidencias ni genera planes |
+| `test_bloqueo_tras_intentos_fallidos` | 5 fallos bloquean esa cuenta y no otras |
+| `test_usuario_dado_de_baja_o_con_otro_rol_al_momento` | el mismo token pierde permisos al cambiar el rol y deja de valer al dar de baja |
+| `test_cambio_de_clave_y_gestion_de_usuarios` | alta con validaciones, cambio de clave, último administrador protegido |
+| `test_secreto_aleatorio_persistente` | sin `HIDRAL_SECRETO`, secreto aleatorio que se conserva entre arranques |
+| `test_avisos_por_rol_y_no_se_marcan_los_ajenos` | cada rol ve lo suyo y lo de los mandos; nadie marca como leído un aviso que no ve |
+| `test_limite_de_tamano_de_subida` | PDF por encima del límite (413) y fichero vacío (400) |
+| `test_numeros_espanoles_e_ingleses` | 1.234,5 · 1,234.5 · 1.234 en el CSV de stock |
+| `test_migracion_de_columnas_nuevas` | una tabla de una versión anterior recibe las columnas nuevas con sus valores por defecto |
+| `test_poda_de_planes_antiguos` | se conservan solo los planes que marca la retención, sin asignaciones huérfanas |
+| `test_quitar_maquina_libera_lo_fijado_y_carga_sin_personas` | lo fijado a una máquina quitada queda libre; un equipo sin nadie cualificado tiene capacidad cero |
+| `test_ocultar_datos_personales` | las líneas con teléfono o correo se ocultan; códigos de artículo, OF y parámetros no se tocan |
+| `test_limpieza_unica_de_bases_anteriores` | una base con datos de contacto se limpia una sola vez |
+
 ## Edición navegador (`tests/test_navegador.py`)
 
 | Prueba | Qué se comprueba |
@@ -112,7 +141,7 @@ ocupación y seguridad (hash de contraseñas y tokens).
 
 ## Resultados de referencia
 
-- 65 pruebas superadas en SQLite y en PostgreSQL 16.
+- 93 pruebas superadas en SQLite y en PostgreSQL 16.
 - Tanda 2210: 99 páginas en 2 bloques (~1,6 s en el entorno de pruebas), 130 OF con hoja propia más
   9 referenciadas sin hoja, 970 líneas, 2 aparatos, 36 bultos, 149 dependencias, 0 ciclos. Con la fábrica de
   ejemplo: 140 operaciones planificadas y 8 no planificables, todas explicadas (sección `PLPINO`

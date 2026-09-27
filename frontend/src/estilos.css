@@ -210,10 +210,10 @@ h3 {
   gap: 14px;
 }
 .rejilla.dos {
-  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
 }
 .rejilla.tres {
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
 }
 
 .kpis {
@@ -1178,3 +1178,24 @@ tr.tenue-suave td { color: var(--texto-2); }
 .entrada-material { white-space: nowrap; }
 label.boton { display: inline-flex; align-items: center; cursor: pointer; }
 .tabla-carga td:last-child .botones { flex-wrap: nowrap; }
+
+/* ---------- auditoría: menú en el móvil, indicadores y tablas anchas ---------- */
+.menu-lateral { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.boton-menu { display: none; }
+.kpi .etiqueta { display: block; background: none; border: 0; padding: 0; white-space: normal; font-weight: 400; font-size: 12px; }
+.panel { overflow-x: auto; }
+@media (max-width: 860px) {
+  .lateral { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 30; }
+  .boton-menu { display: inline-flex; background: transparent; color: var(--lateral-texto); border: 1px solid rgba(255, 255, 255, .25); }
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .contenido { min-width: 0; }
+  .marca { flex: 1 1 auto; min-width: 0; }
+  .boton-menu { flex: 0 0 auto; }
+  .menu-lateral { display: none; flex: 0 0 100%; width: 100%; max-height: calc(100vh - 60px); overflow-y: auto; padding-top: 8px; }
+  .kpis { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  .lateral.abierto .menu-lateral { display: flex; }
+  .lateral.abierto nav { flex-direction: column; }
+  .lateral.abierto .seccion-nav, .lateral.abierto .pie { display: block; }
+  .app { height: auto; min-height: 100%; }
+  .contenido { overflow-y: visible; }
+}

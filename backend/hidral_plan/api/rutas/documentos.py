@@ -53,10 +53,20 @@ async def cargar(fichero: UploadFile = File(...), s: Session = Depends(get_sesio
         raise HTTPException(400, "Solo se admiten ficheros PDF")
     destino = Path(ajustes().almacen_dir) / "tmp"
     destino.mkdir(parents=True, exist_ok=True)
+    limite = ajustes().max_pdf_mb * 1024 * 1024
+    total = 0
     with tempfile.NamedTemporaryFile(dir=destino, suffix=".pdf", delete=False) as tmp:
-        while trozo := await fichero.read(TROZO):
-            tmp.write(trozo)
         ruta = Path(tmp.name)
+        while trozo := await fichero.read(TROZO):
+            total += len(trozo)
+            if total > limite:
+                tmp.close()
+                ruta.unlink(missing_ok=True)
+                raise HTTPException(413, f"El PDF supera el máximo de {ajustes().max_pdf_mb} MB")
+            tmp.write(trozo)
+    if total == 0:
+        ruta.unlink(missing_ok=True)
+        raise HTTPException(400, "El fichero está vacío")
     s.close()
     r = registrar_documento(ruta, fichero.filename or "documento.pdf", u.usuario)
     return {

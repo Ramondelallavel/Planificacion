@@ -3,6 +3,7 @@ tiempos estándar y parámetros de negocio. Todo cambio queda auditado."""
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -183,17 +184,23 @@ def eliminar_recurso(rid: int, s: Session = Depends(get_sesion), u: UsuarioActua
     r = s.get(Recurso, rid)
     if r is None:
         raise HTTPException(404, "Recurso inexistente")
+    # lo pendiente que estaba fijado a esta máquina pasa a poder hacerse en cualquier otra de su sección
+    liberadas = 0
+    for op in s.scalars(select(Operacion).where(Operacion.recurso_preferido == r.codigo, Operacion.estado.not_in([EstadoOperacion.TERMINADA, EstadoOperacion.EN_CURSO, EstadoOperacion.PAUSADA]))):
+        op.recurso_preferido = None
+        liberadas += 1
+    aviso = f" {liberadas} operaciones que estaban fijadas a ella pueden ir ahora a otra máquina de {r.seccion_codigo}; replanifica." if liberadas else ""
     motivo = _con_historia_recurso(s, r)
     if motivo:
         r.activo = False
-        auditar(s, u.usuario, "BAJA_RECURSO", "RECURSO", r.codigo, despues={"activo": False}, motivo=f"No se borra: {motivo}")
-        return {"codigo": r.codigo, "borrado": False, "desactivado": True, "motivo": f"{r.codigo} {motivo}: se ha dado de baja (inactiva) en vez de borrarla"}
+        auditar(s, u.usuario, "BAJA_RECURSO", "RECURSO", r.codigo, despues={"activo": False, "operaciones_liberadas": liberadas}, motivo=f"No se borra: {motivo}")
+        return {"codigo": r.codigo, "borrado": False, "desactivado": True, "liberadas": liberadas, "motivo": f"{r.codigo} {motivo}: se ha dado de baja (inactiva) en vez de borrarla.{aviso}"}
     s.execute(delete(Cualificacion).where(Cualificacion.recurso_codigo == r.codigo))
     s.execute(delete(ParadaRecurso).where(ParadaRecurso.recurso_id == r.id))
     codigo = r.codigo
     s.delete(r)
-    auditar(s, u.usuario, "ELIMINAR_RECURSO", "RECURSO", codigo)
-    return {"codigo": codigo, "borrado": True, "desactivado": False}
+    auditar(s, u.usuario, "ELIMINAR_RECURSO", "RECURSO", codigo, despues={"operaciones_liberadas": liberadas})
+    return {"codigo": codigo, "borrado": True, "desactivado": False, "liberadas": liberadas, "motivo": f"{codigo} eliminada.{aviso}"}
 
 
 @router.get("/operarios")
@@ -339,8 +346,23 @@ class TurnoIn(BaseModel):
     activo: bool = True
 
 
+_HORA = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def _validar_turno(datos: TurnoIn) -> None:
+    horas = [datos.hora_inicio, datos.hora_fin] + [h for p in datos.pausas or [] for h in (p.get("inicio"), p.get("fin"))]
+    malas = [str(h) for h in horas if not isinstance(h, str) or not _HORA.match(h)]
+    if malas:
+        raise HTTPException(400, f"Hora no válida: {', '.join(malas)} (formato HH:MM, de 00:00 a 23:59)")
+    if datos.hora_inicio == datos.hora_fin:
+        raise HTTPException(400, "El turno no puede empezar y acabar a la misma hora")
+    if not datos.dias_semana or any(d not in range(7) for d in datos.dias_semana):
+        raise HTTPException(400, "Días de la semana de 0 (lunes) a 6 (domingo), al menos uno")
+
+
 @router.put("/turnos/{codigo}")
 def guardar_turno(codigo: str, datos: TurnoIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+    _validar_turno(datos)
     t = s.get(Turno, codigo) or Turno(codigo=codigo)
     antes = {"hora_inicio": t.hora_inicio, "hora_fin": t.hora_fin, "dias": t.dias_semana} if t.nombre else None
     t.nombre, t.hora_inicio, t.hora_fin, t.dias_semana, t.pausas, t.activo = datos.nombre, datos.hora_inicio, datos.hora_fin, datos.dias_semana, datos.pausas, datos.activo
@@ -427,6 +449,8 @@ def guardar_config(clave: str, datos: ParametroIn, s: Session = Depends(get_sesi
         f = configuracion.guardar(s, clave, datos.valor, u.usuario, datos.motivo)
     except KeyError as e:
         raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
     return {"clave": clave, "version": f.version}
 
 
@@ -440,6 +464,10 @@ class AusenciaIn(BaseModel):
 def ausencia(oid: int, datos: AusenciaIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     """Ausencia planificada (vacaciones, formación). Para una ausencia imprevista con
     replanificación usar POST /incidencias con tipo AUSENCIA."""
+    if s.get(Operario, oid) is None:
+        raise HTTPException(404, "Operario inexistente")
+    if datos.fin is not None and datos.fin <= datos.inicio:
+        raise HTTPException(400, "El fin de la ausencia tiene que ser posterior al inicio")
     s.add(Ausencia(operario_id=oid, inicio=datos.inicio, fin=datos.fin, motivo=datos.motivo))
     auditar(s, u.usuario, "AUSENCIA_PLANIFICADA", "OPERARIO", oid, despues={"inicio": datos.inicio.isoformat(), "fin": datos.fin.isoformat() if datos.fin else None, "motivo": datos.motivo})
     return {"operario_id": oid}

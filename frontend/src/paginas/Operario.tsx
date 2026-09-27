@@ -198,7 +198,7 @@ export default function Operario() {
           </dl>
           {t.provisional && <div className="mensaje aviso">Provisional: la operación aún está pendiente de programación.</div>}
           {!actual && t.bloqueos.length > 0 && (
-            <div className="mensaje error" style={{ fontSize: 17 }}>
+            <div className="mensaje aviso" style={{ fontSize: 17 }}>
               <strong>Todavía no se puede empezar:</strong>
               <ul>
                 {t.bloqueos.map((b, i) => (
@@ -208,11 +208,20 @@ export default function Operario() {
             </div>
           )}
           <div className="botones-grandes">
-            {!actual && (
-              <button className="btn-iniciar" disabled={ocupado} onClick={() => iniciar(t)}>
-                ▶ INICIAR
-              </button>
-            )}
+            {!actual &&
+              (t.bloqueos.length > 0 && supervisa ? (
+                <button className="btn-iniciar" disabled={ocupado} onClick={() => iniciar(t, true)} title="Queda registrado que lo autorizas tú">
+                  ▶ INICIAR CON AUTORIZACIÓN
+                </button>
+              ) : t.bloqueos.length > 0 ? (
+                <button className="btn-iniciar" disabled title="Tiene que autorizarlo un jefe de equipo">
+                  ▶ INICIAR (necesita autorización)
+                </button>
+              ) : (
+                <button className="btn-iniciar" disabled={ocupado} onClick={() => iniciar(t)}>
+                  ▶ INICIAR
+                </button>
+              ))}
             {actual && actual.estado_fichaje === 'ABIERTO' && (
               <button className="btn-pausar" disabled={ocupado} onClick={() => setDialogo('pausar')}>
                 ❚❚ PAUSAR

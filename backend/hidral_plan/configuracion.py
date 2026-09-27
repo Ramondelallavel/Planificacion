@@ -8,6 +8,7 @@ como tales; cualquier cambio se audita con usuario, fecha y versión.
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -69,6 +70,12 @@ DEFECTOS: dict[str, dict[str, Any]] = {
         "descripcion": "Rendimiento de cada sección en % sobre los tiempos estándar (100 = sin ajuste)",
         "valor": {},
     },
+    # Cuántos planes antiguos se guardan (cada replanificación crea uno): los definitivos y el
+    # activo se guardan siempre; las simulaciones más antiguas que las últimas N se borran.
+    "retencion_planes": {
+        "descripcion": "Planes que se conservan: oficiales archivados y simulaciones (los definitivos siempre)",
+        "valor": {"oficiales": 15, "simulaciones": 30},
+    },
     "aprendizaje": {
         "descripcion": "Aprendizaje de tiempos: nunca se aplica sin aprobación",
         "valor": {"muestras_minimas": 5, "desviacion_minima": 0.10},
@@ -129,9 +136,63 @@ def obtener(s: Session, clave: str) -> dict[str, Any]:
     return base
 
 
+_RANGOS: dict[tuple[str, str], tuple[float, float]] = {
+    ("planificacion", "horizonte_dias"): (1, 120),
+    ("planificacion", "congelar_minutos"): (0, 24 * 60),
+    ("semana_fabricacion", "dia_limite"): (0, 6),
+    ("aprendizaje", "desviacion_minima"): (0, 1),
+    ("aprendizaje", "muestras_minimas"): (1, 1000),
+    ("retencion_planes", "oficiales"): (1, 1000),
+    ("retencion_planes", "simulaciones"): (0, 1000),
+}
+
+
+def _es_numero(v: Any) -> bool:
+    return isinstance(v, int | float) and not isinstance(v, bool)
+
+
+def validar(clave: str, valor: Any) -> None:
+    """Un parámetro mal formado rompería el motor al planificar: se rechaza al guardarlo."""
+    if not isinstance(valor, dict):
+        raise ValueError("El valor tiene que ser un objeto {clave: valor}")
+    defecto = DEFECTOS[clave]["valor"]
+    for k, v in valor.items():
+        if clave == "rendimiento_secciones":
+            if not _es_numero(v) or not 20 <= v <= 300:
+                raise ValueError(f"Rendimiento de {k}: tiene que ser un número entre 20 y 300")
+            continue
+        if k not in defecto:
+            raise ValueError(f"{clave}: clave desconocida «{k}» (válidas: {', '.join(defecto)})")
+        d = defecto[k]
+        if isinstance(d, bool):
+            if not isinstance(v, bool):
+                raise ValueError(f"{clave}.{k}: tiene que ser sí/no")
+        elif _es_numero(d):
+            if not _es_numero(v) or v < 0:
+                raise ValueError(f"{clave}.{k}: tiene que ser un número mayor o igual que cero")
+            lo, hi = _RANGOS.get((clave, k), (0, 1e6))
+            if not lo <= v <= hi:
+                raise ValueError(f"{clave}.{k}: tiene que estar entre {lo:g} y {hi:g}")
+            if isinstance(d, int) and not float(v).is_integer():
+                raise ValueError(f"{clave}.{k}: tiene que ser un número entero")
+        elif isinstance(d, str):
+            if not isinstance(v, str):
+                raise ValueError(f"{clave}.{k}: tiene que ser texto")
+            if k.startswith("hora") and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):
+                raise ValueError(f"{clave}.{k}: hora en formato HH:MM")
+        elif isinstance(d, list):
+            if not isinstance(v, list):
+                raise ValueError(f"{clave}.{k}: tiene que ser una lista")
+            if clave == "mapeo_operaciones" and not all(isinstance(r, list) and len(r) == 2 and all(isinstance(x, str) and x for x in r) for r in v):
+                raise ValueError("mapeo_operaciones.reglas: cada regla es [palabra clave, tipo de operación]")
+        elif isinstance(d, dict) and not isinstance(v, dict):
+            raise ValueError(f"{clave}.{k}: tiene que ser un objeto")
+
+
 def guardar(s: Session, clave: str, valor: dict[str, Any], usuario: str, motivo: str | None = None) -> ParametroConfig:
     if clave not in DEFECTOS:
         raise KeyError(f"Parámetro desconocido: {clave}")
+    validar(clave, valor)
     fila = s.get(ParametroConfig, clave)
     antes = obtener(s, clave)
     if fila is None:

@@ -3,6 +3,7 @@ import { BrowserRouter, HashRouter, Navigate, NavLink, Route, Routes } from 'rea
 import { guardarSesion, onSesionCaducada, puede, sesionGuardada, type Sesion } from './api'
 import Avisos from './componentes/Avisos'
 import Buscador from './componentes/Buscador'
+import CambiarClave from './componentes/CambiarClave'
 import PedirCambio from './componentes/PedirCambio'
 import { NAVEGADOR, onMotor } from './motor'
 import Datos from './paginas/Datos'
@@ -81,6 +82,8 @@ function useCopiaAutomatica(activa: boolean) {
 
 export default function App() {
   const [sesion, setSesion] = useState<Sesion | null>(sesionGuardada())
+  const [menu, setMenu] = useState(false)
+  const [clave, setClave] = useState(false)
   useEffect(() => onSesionCaducada(() => setSesion(null)), [])
   const estadoCopia = useCopiaAutomatica(NAVEGADOR && !!sesion && puede(sesion, 'configurar'))
   const salir = () => {
@@ -102,11 +105,22 @@ export default function App() {
     <Ctx.Provider value={{ sesion, salir }}>
       <Enrutador>
         <div className="app">
-          <aside className="lateral">
+          <aside className={`lateral ${menu ? 'abierto' : ''}`}>
             <div className="marca">
               HIDRAL
               <small>Planificación y control de fabricación</small>
             </div>
+            <button className="boton-menu" aria-expanded={menu} aria-controls="menu-principal" onClick={() => setMenu(!menu)}>
+              {menu ? '✕ Cerrar' : '☰ Menú'}
+            </button>
+            <div
+              id="menu-principal"
+              className="menu-lateral"
+              onClick={(e) => {
+                // en el móvil el menú se cierra al elegir una pantalla
+                if ((e.target as HTMLElement).closest('a')) setMenu(false)
+              }}
+            >
             {ver && <Buscador />}
             {ver && <Avisos />}
             <nav>
@@ -146,12 +160,15 @@ export default function App() {
                 <strong>{sesion.nombre}</strong>
               </div>
               <div>{ROL_TEXTO[sesion.rol] ?? sesion.rol}</div>
-              <button onClick={salir} style={{ marginTop: 8 }}>
-                Salir
-              </button>
+              <div className="botones" style={{ marginTop: 8 }}>
+                <button onClick={salir}>Salir</button>
+                <button onClick={() => setClave(true)}>Contraseña</button>
+              </div>
               {estadoCopia && <div className="estado-copia">{estadoCopia}</div>}
             </div>
+            </div>
           </aside>
+          {clave && <CambiarClave onCerrar={() => setClave(false)} />}
           <main className="contenido">
             <Routes>
               {ver ? (

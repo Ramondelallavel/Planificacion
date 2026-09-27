@@ -24,6 +24,11 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def ciclo_vida(app: FastAPI):
     crear_tablas()
+    from ..db import sesion
+    from ..servicios.privacidad import limpiar_datos_personales
+
+    with sesion() as s:
+        limpiar_datos_personales(s)
     parar = None
     if ajustes().worker_en_proceso:
         from ..ingesta.cola import iniciar_en_hilo
@@ -44,6 +49,16 @@ def crear_app() -> FastAPI:
     )
     app.add_middleware(CORSMiddleware, allow_origins=ajustes().cors_origenes, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+    @app.middleware("http")
+    async def cabeceras_seguridad(request: Request, call_next):
+        r = await call_next(request)
+        r.headers.setdefault("X-Content-Type-Options", "nosniff")
+        r.headers.setdefault("Referrer-Policy", "same-origin")
+        r.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        if request.url.path.startswith("/api/"):
+            r.headers.setdefault("Cache-Control", "no-store")
+        return r
+
     @app.exception_handler(CambioRechazado)
     async def _cambio(_: Request, exc: CambioRechazado):
         return JSONResponse(status_code=409, content={"detail": "Cambio rechazado por restricciones duras", "errores": exc.errores})
@@ -62,6 +77,7 @@ def crear_app() -> FastAPI:
 
     for r in (auth, documentos, estructura, plan, planta, recursos, dashboard, gestion, carga, materiales):
         app.include_router(r.router, prefix="/api")
+    app.include_router(auth.usuarios, prefix="/api")
 
     @app.get("/api/salud")
     def salud() -> dict:

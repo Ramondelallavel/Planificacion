@@ -77,6 +77,46 @@ def crear_tablas() -> None:
     from . import modelos  # noqa: F401  (registra los modelos en Base.metadata)
 
     Base.metadata.create_all(motor())
+    migrar_columnas()
+
+
+def _literal(valor, dialecto: str) -> str | None:
+    if isinstance(valor, bool):
+        return ("TRUE" if valor else "FALSE") if dialecto == "postgresql" else ("1" if valor else "0")
+    if isinstance(valor, int | float):
+        return str(valor)
+    if isinstance(valor, str):
+        return "'" + valor.replace("'", "''") + "'"
+    return None
+
+
+def migrar_columnas() -> list[str]:
+    """create_all crea las tablas nuevas pero no añade columnas nuevas a las que ya existen. Con
+    esto una base creada por una versión anterior (la del navegador de cada usuario, o una
+    instalación con datos) sigue funcionando: se añaden las columnas que falten."""
+    from sqlalchemy import inspect, text
+
+    eng = motor()
+    insp = inspect(eng)
+    hechas: list[str] = []
+    with eng.begin() as con:
+        for tabla in Base.metadata.sorted_tables:
+            if not insp.has_table(tabla.name):
+                continue
+            existentes = {c["name"] for c in insp.get_columns(tabla.name)}
+            for col in tabla.columns:
+                if col.name in existentes:
+                    continue
+                tipo = col.type.compile(dialect=eng.dialect)
+                defecto = col.default.arg if col.default is not None and getattr(col.default, "is_scalar", False) else None
+                lit = _literal(defecto, eng.dialect.name) if defecto is not None else None
+                con.execute(text(f'ALTER TABLE "{tabla.name}" ADD COLUMN "{col.name}" {tipo}' + (f" DEFAULT {lit}" if lit else "")))
+                hechas.append(f"{tabla.name}.{col.name}")
+    if hechas:
+        import logging
+
+        logging.getLogger(__name__).warning("Esquema actualizado: columnas añadidas %s", ", ".join(hechas))
+    return hechas
 
 
 def reiniciar_motor() -> None:

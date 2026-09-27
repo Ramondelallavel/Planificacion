@@ -10,9 +10,10 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
+from .. import configuracion
 from ..modelos import (
     Aparato,
     AsignacionPlan,
@@ -136,7 +137,7 @@ def _actualizar_entidades(s: Session, inst: Instantanea, asigs: dict[int, AsigP]
             if r["nivel"] == "ROJO" and ap.riesgo_nivel != "ROJO":
                 # aviso al planificador: el aparato acaba de pasar a no llegar a su semana
                 motivo = r["motivos"][0] if r["motivos"] else "no llega a su semana de fabricación"
-                s.add(Notificacion(rol_destino="PLANIFICADOR", titulo=f"Aparato {ap.referencia} en riesgo ROJO", mensaje=motivo, nivel="ALERTA", referencia=f"aparato:{ap.id}"))
+                s.add(Notificacion(rol_destino="MANDOS", titulo=f"Aparato {ap.referencia} en riesgo ROJO", mensaje=motivo, nivel="ALERTA", referencia=f"aparato:{ap.id}"))
             ap.riesgo_nivel, ap.riesgo_motivos = r["nivel"], r["motivos"]
             ap.fin_previsto = datetime.fromisoformat(r["fin_previsto"]) if r["fin_previsto"] else None
             ap.carga_restante_h = r["horas_restantes"]
@@ -356,7 +357,26 @@ def generar_plan(
         motivo=motivo,
         automatica=False,
     )
+    podar_planes(s)
     return {"plan_id": plan.id, "kpis": kpis, "comprobaciones": checks, "no_planificadas": len(res.no_planificadas), "riesgo_tandas": list(riesgos["tandas"].values())}
+
+
+def podar_planes(s: Session) -> int:
+    """Cada replanificación guarda un plan entero: sin poda la base crece sin fin (y en la edición
+    navegador, el almacenamiento del navegador). Se conservan el activo, los definitivos, los N
+    oficiales archivados más recientes y las M simulaciones más recientes."""
+    cfg = configuracion.obtener(s, "retencion_planes")
+    borrar: list[int] = []
+    for tipo, n in ((TipoPlan.OFICIAL, int(cfg.get("oficiales", 15))), (TipoPlan.SIMULACION, int(cfg.get("simulaciones", 30)))):
+        q = select(Plan.id).where(Plan.tipo == tipo, Plan.estado != EstadoPlan.ACTIVO, Plan.definitivo.is_(False)).order_by(Plan.id.desc()).offset(n)
+        borrar += list(s.scalars(q))
+    if not borrar:
+        return 0
+    s.execute(update(Plan).where(Plan.plan_base_id.in_(borrar)).values(plan_base_id=None))
+    s.execute(delete(CambioPlan).where(CambioPlan.plan_id.in_(borrar)))
+    s.execute(delete(AsignacionPlan).where(AsignacionPlan.plan_id.in_(borrar)))
+    s.execute(delete(Plan).where(Plan.id.in_(borrar)))
+    return len(borrar)
 
 
 # ------------------------------------------------------------------ incidencias y replanificación
@@ -804,6 +824,7 @@ def simular_escenario(s: Session, escenario: dict, usuario: str, ahora: datetime
         s.flush()
         _guardar_asignaciones(s, sim, res.asignaciones)
         r["simulacion_id"] = sim.id
+        podar_planes(s)
         auditar(s, usuario, "SIMULACION", "PLAN", sim.id, despues={"escenario": r["escenario"]})
     return r
 
@@ -913,7 +934,6 @@ def aplicar_escenario(s: Session, escenario: dict, usuario: str, ahora: datetime
     """Hace reales las DECISIONES de un escenario what-if (turnos extra, OF adelantadas, pesos de
     prioridad) y genera el plan oficial con ellas. Los SUPUESTOS (averías, ausencias…) describen
     cosas que no dependen de la planta: se simulan, pero no se «aplican»."""
-    from .. import configuracion
 
     supuestos = [txt for k, txt in SUPUESTOS.items() if escenario.get(k)]
     if supuestos:

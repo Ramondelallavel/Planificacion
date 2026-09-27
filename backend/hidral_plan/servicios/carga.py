@@ -321,6 +321,8 @@ def resumen_carga(s: Session, ahora: datetime, dias: int = 14) -> dict:
     codigos_sec = {r.codigo: r.seccion for r in inst.recursos.values()}
     for o in inst.operarios.values():
         secciones = {codigos_sec[c] for c in o.recursos if c in codigos_sec}
+        # cualificados por tipo de operación: en las secciones cuyas máquinas hacen ese tipo
+        secciones |= {r.seccion for r in inst.recursos.values() if r.operaciones and o.tipos & set(r.operaciones)}
         disp = inst.ventanas_operario(o).minutos(ahora, hasta)
         for x in secciones:
             sec[x or "—"]["per_min"] += disp / len(secciones)  # quien sabe de varias secciones reparte su tiempo
@@ -330,13 +332,14 @@ def resumen_carga(s: Session, ahora: datetime, dias: int = 14) -> dict:
     for codigo, d in sorted(sec.items()):
         maq, per = d["maq_min"], d["per_min"]
         necesita_personas = any(r.requiere_operario for r in inst.recursos.values() if (r.seccion or "—") == codigo)
-        capacidad = min(maq, per) if necesita_personas and per > 0 else maq
+        # sin nadie cualificado, las máquinas que necesitan operario no producen nada
+        capacidad = min(maq, per) if necesita_personas else maq
         salida.append({
             "seccion": codigo, "nombre": nombres.get(codigo), "rendimiento": rend.get(codigo, 100.0),
             "demanda_h": round(d["demanda_min"] / 60, 1), "demanda_base_h": round(d["demanda_base_min"] / 60, 1), "operaciones": d["operaciones"], "sin_tiempo": d["sin_tiempo"],
             "capacidad_maquinas_h": round(maq / 60, 1), "capacidad_personas_h": round(per / 60, 1), "capacidad_h": round(capacidad / 60, 1),
             "carga": round(d["demanda_min"] / capacidad, 3) if capacidad else None,
-            "limitada_por": ("personas" if necesita_personas and 0 < per < maq else "maquinas") if capacidad else "sin capacidad",
+            "limitada_por": ("personas" if necesita_personas and per < maq else "maquinas") if capacidad else ("nadie cualificado" if necesita_personas and maq and not per else "sin capacidad"),
             "maquinas": d["maquinas"], "operarios": d["operarios"],
             "por_tanda": sorted(({"tanda": k, "horas": round(v / 60, 1)} for k, v in d["por_tanda"].items()), key=lambda x: -x["horas"]),
             "por_tipo": sorted(({"tipo": k, "horas": round(v / 60, 1)} for k, v in d["por_tipo"].items()), key=lambda x: -x["horas"]),

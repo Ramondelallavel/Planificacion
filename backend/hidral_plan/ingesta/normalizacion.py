@@ -81,3 +81,26 @@ def partes_articulo(codigo: str) -> tuple[str, str | None]:
     if not m:
         return codigo, None
     return m.group("base"), m.group("rev")
+
+
+# ------------------------------------------------------------------ datos personales
+_RE_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# teléfono con prefijo de etiqueta (TF 619…, Tfno.: 965…) o en grupos separados (619 07 11 87)
+_RE_TEL_ETIQUETA = re.compile(r"(?i)\b(?:tf|tfno|tlf|telf|tel|tel[eé]fono|m[oó]vil|movil|phone|mobile|fax)\b\.?[^\n]{0,80}?\+?\d[\d .-]{7,}\d")
+_RE_TEL_GRUPOS = re.compile(r"(?<![\d/.,])(?:\+\d{2,3}[ .-]?)?[6789]\d{2}(?:[ .-]\d{2,3}){2,3}(?![\d/.,])")
+OCULTO = "[datos de contacto ocultos]"
+
+
+def ocultar_datos_personales(texto: str | None) -> str | None:
+    """Sustituye las líneas con correos o teléfonos (p.ej. las observaciones de un packing list con
+    el contacto del cliente) por una marca. Solo afecta al texto que se guarda para auditoría: la
+    interpretación del documento ya se ha hecho."""
+    if not texto:
+        return texto
+    lineas = texto.split("\n")
+    cambiado = False
+    for i, ln in enumerate(lineas):
+        if _RE_EMAIL.search(ln) or _RE_TEL_ETIQUETA.search(ln) or _RE_TEL_GRUPOS.search(ln):
+            lineas[i] = OCULTO
+            cambiado = True
+    return "\n".join(lineas) if cambiado else texto

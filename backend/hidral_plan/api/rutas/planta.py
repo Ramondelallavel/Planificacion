@@ -13,7 +13,7 @@ from ...modelos import AsignacionPlan, Fichaje, IncidenciaProduccion, Notificaci
 from ...planificacion import servicio as sv
 from ...servicios import ejecucion as ex
 from ...servicios.auditoria import auditar
-from ..deps import UsuarioActual, ahora, get_sesion, requiere, usuario_actual
+from ..deps import UsuarioActual, ahora, get_sesion, requiere, requiere_alguno, usuario_actual
 
 router = APIRouter(tags=["planta"])
 
@@ -41,7 +41,7 @@ class Iniciar(BaseModel):
 
 
 @router.post("/operario/iniciar")
-def iniciar(datos: Iniciar, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(usuario_actual)) -> dict:
+def iniciar(datos: Iniciar, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere_alguno("fichar", "fichar_supervisado"))) -> dict:
     oid = _operario_de(u, datos.operario_id)
     autorizado = None
     if datos.autorizado_por:
@@ -65,13 +65,13 @@ class Pausa(BaseModel):
 
 
 @router.post("/operario/fichajes/{fichaje_id}/pausar")
-def pausar(fichaje_id: int, datos: Pausa, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(usuario_actual)) -> dict:
+def pausar(fichaje_id: int, datos: Pausa, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere_alguno("fichar", "fichar_supervisado"))) -> dict:
     _fichaje_propio(s, fichaje_id, u)
     return ex.pausar(s, fichaje_id, u.usuario, ahora(), datos.motivo)
 
 
 @router.post("/operario/fichajes/{fichaje_id}/reanudar")
-def reanudar(fichaje_id: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(usuario_actual)) -> dict:
+def reanudar(fichaje_id: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere_alguno("fichar", "fichar_supervisado"))) -> dict:
     _fichaje_propio(s, fichaje_id, u)
     return ex.reanudar(s, fichaje_id, u.usuario, ahora())
 
@@ -82,7 +82,7 @@ class Terminar(BaseModel):
 
 
 @router.post("/operario/fichajes/{fichaje_id}/terminar")
-def terminar(fichaje_id: int, datos: Terminar, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(usuario_actual)) -> dict:
+def terminar(fichaje_id: int, datos: Terminar, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere_alguno("fichar", "fichar_supervisado"))) -> dict:
     _fichaje_propio(s, fichaje_id, u)
     return ex.terminar(s, fichaje_id, u.usuario, ahora(), datos.cantidad, datos.parcial)
 
@@ -95,7 +95,7 @@ class IncidenciaOperario(BaseModel):
 
 
 @router.post("/operario/incidencia")
-def incidencia_operario(datos: IncidenciaOperario, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(usuario_actual)) -> dict:
+def incidencia_operario(datos: IncidenciaOperario, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("incidencias"))) -> dict:
     """INCIDENCIA desde la pantalla del operario: se registra y, si afecta al plan, se replanifica."""
     op = s.get(Operacion, datos.operacion_id) if datos.operacion_id else None
     recurso_id = None
@@ -117,11 +117,11 @@ def incidencia_operario(datos: IncidenciaOperario, s: Session = Depends(get_sesi
         inc = IncidenciaProduccion(tipo=datos.tipo, descripcion=datos.descripcion, operacion_id=evento["operacion_id"], of_id=evento["of_id"], recurso_id=recurso_id, operario_id=u.operario_id, reportado_por=u.usuario)
         s.add(inc)
         s.flush()
-        s.add(Notificacion(rol_destino="JEFE_EQUIPO", titulo=f"Incidencia {datos.tipo}", mensaje=datos.descripcion, nivel="AVISO", referencia=f"incidencia:{inc.id}"))
+        s.add(Notificacion(rol_destino=MANDOS, titulo=f"Incidencia {datos.tipo}", mensaje=datos.descripcion, nivel="AVISO", referencia=f"incidencia:{inc.id}"))
         auditar(s, u.usuario, "INCIDENCIA", "INCIDENCIA", inc.id, despues=evento)
         return {"incidencia_id": inc.id, "replanificado": False}
     r = sv.registrar_incidencia(s, evento, u.usuario, ahora())
-    s.add(Notificacion(rol_destino="JEFE_EQUIPO", titulo=f"Incidencia {datos.tipo}", mensaje=datos.descripcion + (f"\n{r.get('resumen')}" if r.get("resumen") else ""), nivel="ALERTA", referencia=f"incidencia:{r['incidencia_id']}"))
+    s.add(Notificacion(rol_destino=MANDOS, titulo=f"Incidencia {datos.tipo}", mensaje=datos.descripcion + (f"\n{r.get('resumen')}" if r.get("resumen") else ""), nivel="ALERTA", referencia=f"incidencia:{r['incidencia_id']}"))
     return r
 
 
@@ -143,7 +143,17 @@ class Incidencia(BaseModel):
 
 @router.post("/incidencias")
 def registrar(datos: Incidencia, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("incidencias"))) -> dict:
-    return sv.registrar_incidencia(s, datos.model_dump(), u.usuario, ahora())
+    necesita = {"AVERIA": ("recurso_id", "la máquina averiada"), "AUSENCIA": ("operario_id", "el operario ausente"), "FALTA_MATERIAL": ("of_id", "la OF sin material"), "RETRASO": ("operacion_id", "la operación retrasada")}
+    if datos.tipo in necesita and getattr(datos, necesita[datos.tipo][0]) is None:
+        raise HTTPException(400, f"Para una incidencia {datos.tipo} indica {necesita[datos.tipo][1]}")
+    if datos.inicio and datos.fin and datos.fin <= datos.inicio:
+        raise HTTPException(400, "El fin tiene que ser posterior al inicio")
+    if datos.horas is not None and datos.horas <= 0:
+        raise HTTPException(400, "La duración tiene que ser mayor que cero")
+    r = sv.registrar_incidencia(s, datos.model_dump(), u.usuario, ahora())
+    nivel = "ALERTA" if datos.tipo in ("AVERIA", "AUSENCIA", "FALTA_MATERIAL") else "AVISO"
+    s.add(Notificacion(rol_destino=MANDOS, titulo=f"Incidencia {datos.tipo} (registrada por {u.usuario})", mensaje=datos.descripcion + (f"\n{r.get('resumen')}" if r.get("resumen") else ""), nivel=nivel, referencia=f"incidencia:{r['incidencia_id']}"))
+    return r
 
 
 @router.get("/incidencias")
@@ -182,16 +192,19 @@ def cerrar(inc_id: int, s: Session = Depends(get_sesion), u: UsuarioActual = Dep
     return {"id": i.id, "estado": i.estado}
 
 
+MANDOS = "MANDOS"  # aviso para planificadores, jefes de equipo, supervisores y administradores
+
+
 def _visibles(u: UsuarioActual, solo_roles: bool = False):
     q = select(Notificacion)
     if u.operario_id and not u.puede("ver"):
         return q.where(Notificacion.operario_id == u.operario_id)
+    # lo dirigido a su rol o a todos los mandos (el administrador lo ve todo)
+    para_mi = Notificacion.rol_destino.is_not(None) if u.rol == "ADMINISTRADOR" else Notificacion.rol_destino.in_([u.rol, MANDOS])
     if solo_roles:
-        # centro de avisos de mandos: lo dirigido a un rol, no los cambios de carga de cada operario
-        return q.where(Notificacion.rol_destino.is_not(None))
-    if not u.operario_id:
-        return q.where((Notificacion.rol_destino.is_not(None)) | (Notificacion.operario_id.is_not(None)))
-    return q
+        # centro de avisos de mandos: no los cambios de carga de cada operario
+        return q.where(para_mi)
+    return q.where(para_mi | (Notificacion.operario_id.is_not(None)) | (Notificacion.operario_id == u.operario_id))
 
 
 @router.get("/notificaciones")
@@ -210,8 +223,9 @@ def todas_leidas(solo_roles: bool = True, s: Session = Depends(get_sesion), u: U
 
 
 @router.post("/notificaciones/{nid}/leida")
-def leida(nid: int, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(usuario_actual)) -> dict:
-    n = s.get(Notificacion, nid)
-    if n:
-        n.leida = True
+def leida(nid: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(usuario_actual)) -> dict:
+    n = s.scalar(_visibles(u).where(Notificacion.id == nid))
+    if n is None:
+        raise HTTPException(404, "Aviso inexistente")
+    n.leida = True
     return {"id": nid}

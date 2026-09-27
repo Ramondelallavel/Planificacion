@@ -77,6 +77,8 @@ const lista = (v: string) =>
 
 export default function Configuracion() {
   const [pestana, setPestana] = useState('recursos')
+  const { sesion } = useSesion()
+  const pestanas = puede(sesion, 'usuarios') ? [...PESTANAS, ['usuarios', 'Usuarios y accesos']] : PESTANAS
   return (
     <>
       <div className="cabecera">
@@ -86,7 +88,7 @@ export default function Configuracion() {
         </div>
       </div>
       <div className="pestanas">
-        {PESTANAS.map(([k, t]) => (
+        {pestanas.map(([k, t]) => (
           <button key={k} className={pestana === k ? 'activa' : ''} onClick={() => setPestana(k)}>
             {t}
           </button>
@@ -101,6 +103,7 @@ export default function Configuracion() {
       {pestana === 'parametros' && <ParametrosPlan />}
       {pestana === 'integraciones' && <Integraciones />}
       {pestana === 'aprendizaje' && <Aprendizaje />}
+      {pestana === 'usuarios' && <Usuarios />}
     </>
   )
 }
@@ -187,7 +190,7 @@ function Recursos() {
                             setAviso(null)
                             try {
                               const x = await api.del<{ borrado: boolean; motivo?: string }>(`/recursos/${r.id}`)
-                              setAviso(x.borrado ? `${r.codigo} eliminada.` : (x.motivo ?? `${r.codigo} dada de baja.`))
+                              setAviso(x.motivo ?? (x.borrado ? `${r.codigo} eliminada.` : `${r.codigo} dada de baja.`))
                               recargar()
                             } catch (e) {
                               setAviso(e instanceof Error ? e.message : String(e))
@@ -1495,5 +1498,169 @@ function Aprendizaje() {
         </table>
       )}
     </section>
+  )
+}
+
+// ------------------------------------------------------------------ usuarios
+interface UsuarioApp {
+  usuario: string
+  nombre: string
+  rol: string
+  activo: boolean
+  operario_id: number | null
+}
+const ROLES: [string, string][] = [
+  ['ADMINISTRADOR', 'Administrador: todo, también usuarios'],
+  ['PLANIFICADOR', 'Planificador: plan, configuración, importación'],
+  ['JEFE_EQUIPO', 'Jefe de equipo: plan, incidencias, autorizar fichajes'],
+  ['SUPERVISOR', 'Supervisor: ver, incidencias, simular'],
+  ['OPERARIO', 'Operario: su trabajo y sus fichajes'],
+  ['CONSULTA', 'Consulta: solo ver'],
+]
+
+function Usuarios() {
+  const { sesion } = useSesion()
+  const { datos, error, recargar } = useDatos(() => api.get<UsuarioApp[]>('/usuarios'), [])
+  const operarios = useDatos(() => api.get<Operario[]>('/operarios'), [])
+  const [editar, setEditar] = useState<UsuarioApp | 'nuevo' | null>(null)
+  const [aviso, setAviso] = useState<string | null>(null)
+  const nombreOperario = (id: number | null) => (id == null ? '—' : (operarios.datos ?? []).find((o) => o.id === id)?.nombre ?? `#${id}`)
+  return (
+    <section className="panel">
+      <div className="cabecera">
+        <div>
+          <h2>Usuarios y accesos</h2>
+          <p className="pequeno tenue">Quién puede entrar y con qué rol. Los cambios de rol o las bajas valen al momento, también para quien ya está dentro. Tras 5 intentos fallidos una cuenta queda bloqueada 15 minutos.</p>
+        </div>
+        <button className="primario" onClick={() => setEditar('nuevo')}>
+          Nuevo usuario
+        </button>
+      </div>
+      <MensajeError error={error} />
+      {aviso && <div className="mensaje ok">{aviso}</div>}
+      {!datos ? (
+        <Cargando />
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Usuario</th>
+              <th>Nombre</th>
+              <th>Rol</th>
+              <th>Operario</th>
+              <th>Estado</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {datos.map((u) => (
+              <tr key={u.usuario} className={u.activo ? '' : 'tenue'}>
+                <td className="mono">{u.usuario}</td>
+                <td>{u.nombre}</td>
+                <td>{u.rol}</td>
+                <td className="pequeno">{nombreOperario(u.operario_id)}</td>
+                <td>{u.activo ? 'Activo' : <span className="etiqueta">de baja</span>}</td>
+                <td>
+                  <div className="botones">
+                    <button onClick={() => setEditar(u)}>Editar</button>
+                    {u.usuario !== sesion?.usuario && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await api.patch(`/usuarios/${encodeURIComponent(u.usuario)}`, { activo: !u.activo })
+                            setAviso(`${u.usuario} ${u.activo ? 'dado de baja' : 'reactivado'}.`)
+                            recargar()
+                          } catch (e) {
+                            setAviso(e instanceof Error ? e.message : String(e))
+                          }
+                        }}
+                      >
+                        {u.activo ? 'Dar de baja' : 'Reactivar'}
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {editar && (
+        <EditarUsuario
+          u={editar === 'nuevo' ? null : editar}
+          operarios={operarios.datos ?? []}
+          onCerrar={() => setEditar(null)}
+          onHecho={(t) => {
+            setEditar(null)
+            setAviso(t)
+            recargar()
+          }}
+        />
+      )}
+    </section>
+  )
+}
+
+function EditarUsuario({ u, operarios, onCerrar, onHecho }: { u: UsuarioApp | null; operarios: Operario[]; onCerrar: () => void; onHecho: (t: string) => void }) {
+  const [f, setF] = useState({ usuario: u?.usuario ?? '', nombre: u?.nombre ?? '', rol: u?.rol ?? 'CONSULTA', operario: u?.operario_id != null ? String(u.operario_id) : '', clave: '' })
+  const [err, setErr] = useState<unknown>(null)
+  return (
+    <Modal titulo={u ? `Usuario ${u.usuario}` : 'Nuevo usuario'} onCerrar={onCerrar}>
+      <div className="formulario">
+        <label className="campo">
+          Usuario (para entrar)
+          <input value={f.usuario} disabled={!!u} autoComplete="off" onChange={(e) => setF({ ...f, usuario: e.target.value })} />
+        </label>
+        <label className="campo">
+          Nombre
+          <input value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} />
+        </label>
+        <label className="campo">
+          Rol
+          <select value={f.rol} onChange={(e) => setF({ ...f, rol: e.target.value })}>
+            {ROLES.map(([k, t]) => (
+              <option key={k} value={k}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="campo">
+          Operario de planta (para su pantalla de trabajo)
+          <select value={f.operario} onChange={(e) => setF({ ...f, operario: e.target.value })}>
+            <option value="">— ninguno</option>
+            {operarios.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.codigo} · {o.nombre}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="campo">
+          {u ? 'Nueva contraseña (vacío = no cambiarla)' : 'Contraseña (mínimo 8 caracteres)'}
+          <input type="password" autoComplete="new-password" value={f.clave} onChange={(e) => setF({ ...f, clave: e.target.value })} />
+        </label>
+      </div>
+      <MensajeError error={err} />
+      <div className="botones" style={{ marginTop: 8 }}>
+        <button
+          className="primario"
+          disabled={!f.nombre || (!u && (!f.usuario || f.clave.length < 8)) || (f.clave.length > 0 && f.clave.length < 8)}
+          onClick={async () => {
+            try {
+              const cuerpo = { nombre: f.nombre, rol: f.rol, operario_id: f.operario ? Number(f.operario) : null, ...(f.clave ? { clave: f.clave } : {}) }
+              if (u) await api.patch(`/usuarios/${encodeURIComponent(u.usuario)}`, cuerpo)
+              else await api.post('/usuarios', { usuario: f.usuario, ...cuerpo })
+              onHecho(u ? `Usuario ${u.usuario} guardado.` : `Usuario ${f.usuario.trim().toLowerCase()} creado.`)
+            } catch (e) {
+              setErr(e)
+            }
+          }}
+        >
+          Guardar
+        </button>
+        <button onClick={onCerrar}>Cancelar</button>
+      </div>
+    </Modal>
   )
 }

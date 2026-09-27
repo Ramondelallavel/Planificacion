@@ -77,6 +77,11 @@ def preparar(secreto: str, config_yaml: str | None = None, ahora_fijo: str | Non
 
             cargar_configuracion(s, yaml.safe_load(config_yaml), True)
             nueva = True
+    with sesion() as s:
+        # bases guardadas por versiones anteriores: sin correos ni teléfonos en el texto de las páginas
+        from .servicios.privacidad import limpiar_datos_personales
+
+        limpiar_datos_personales(s)
 
     from .api.app import crear_app
 

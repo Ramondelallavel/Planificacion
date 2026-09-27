@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ...config import ajustes
 from ...integraciones import SISTEMA_MAESTRO
 from ...integraciones.adaptadores import IMPORTADORES, AdaptadorCSV
 from ...modelos import Auditoria, EstimacionPropuesta, TiempoEstandar
@@ -54,7 +55,10 @@ async def importar(
         raise HTTPException(404, f"Sistema desconocido: {sistema}")
     import json
 
-    contenido = (await fichero.read()).decode("utf-8-sig", errors="replace")
+    crudo = await fichero.read(ajustes().max_csv_mb * 1024 * 1024 + 1)
+    if len(crudo) > ajustes().max_csv_mb * 1024 * 1024:
+        raise HTTPException(413, f"El fichero supera el máximo de {ajustes().max_csv_mb} MB")
+    contenido = crudo.decode("utf-8-sig", errors="replace")
     mapeo = json.loads(mapeo_columnas) if mapeo_columnas else None
     return IMPORTADORES[sistema](s, AdaptadorCSV(sistema.upper(), contenido, mapeo), u.usuario).a_dict()
 

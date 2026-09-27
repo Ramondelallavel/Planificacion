@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from ...config import ajustes
 from ...modelos import EntradaMaterial, Material
 from ...modelos.comun import ahora as reloj
 from ...planificacion import servicio as sv
@@ -137,10 +139,28 @@ def calcular(replanificar: bool = True, s: Session = Depends(get_sesion), u: Usu
     return r
 
 
+def numero_es(txt: str) -> float:
+    """Número escrito a la española o a la inglesa: 1.234,5 · 1234,5 · 1.234 · 1234.5 · 1,234.5"""
+    t = txt.strip().replace(" ", "")
+    if "," in t and "." in t:
+        t = t.replace(".", "").replace(",", ".") if t.rfind(",") > t.rfind(".") else t.replace(",", "")
+    elif "," in t:
+        t = t.replace(",", ".")
+    elif re.fullmatch(r"-?\d{1,3}(\.\d{3})+", t):
+        t = t.replace(".", "")  # 1.234 → miles
+    v = float(t)
+    if v < 0:
+        raise ValueError("negativo")
+    return v
+
+
 @router.post("/importar")
 async def importar(fichero: UploadFile = File(...), s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     """CSV con columnas codigo;descripcion;unidad;stock (separador ; o ,; decimales con coma o punto)."""
-    texto = (await fichero.read()).decode("utf-8-sig", errors="replace")
+    crudo = await fichero.read(ajustes().max_csv_mb * 1024 * 1024 + 1)
+    if len(crudo) > ajustes().max_csv_mb * 1024 * 1024:
+        raise HTTPException(413, f"El CSV supera el máximo de {ajustes().max_csv_mb} MB")
+    texto = crudo.decode("utf-8-sig", errors="replace")
     dialecto = csv.Sniffer().sniff(texto.splitlines()[0] if texto else "codigo;stock", delimiters=";,\t")
     filas = list(csv.DictReader(io.StringIO(texto), dialect=dialecto))
     hechos, errores = 0, []
@@ -151,7 +171,7 @@ async def importar(fichero: UploadFile = File(...), s: Session = Depends(get_ses
             errores.append(f"fila {i}: sin código")
             continue
         try:
-            stock = float(f.get("stock", "0").replace(".", "").replace(",", ".")) if "," in f.get("stock", "") else float(f.get("stock") or 0)
+            stock = numero_es(f.get("stock") or "0")
         except ValueError:
             errores.append(f"fila {i}: stock «{f.get('stock')}» no es un número")
             continue

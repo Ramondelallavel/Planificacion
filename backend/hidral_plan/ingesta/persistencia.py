@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from ..config import ajustes
 from ..modelos import (
     Aparato,
     Articulo,
@@ -30,7 +31,7 @@ from ..modelos import (
 )
 from ..modelos.enums import Fuente, Severidad
 from .maquetacion import parametros_a_dict
-from .normalizacion import partes_articulo
+from .normalizacion import ocultar_datos_personales, partes_articulo
 from .registros import (
     RegAparato,
     RegAviso,
@@ -71,7 +72,7 @@ def _aviso(s: Session, est: EstadoPersistencia, a: RegAviso) -> None:
             mensaje=a.mensaje,
             entidad_tipo=a.entidad_tipo,
             entidad_ref=a.entidad_ref,
-            texto_origen=a.texto_origen,
+            texto_origen=ocultar_datos_personales(a.texto_origen) if ajustes().ocultar_datos_personales else a.texto_origen,
             alternativas=a.alternativas,
         )
     )
@@ -90,7 +91,7 @@ def _origen(
             documento_id=est.documento_id,
             pagina=pagina,
             bloque=bloque,
-            texto_origen=(texto or "")[:2000],
+            texto_origen=((ocultar_datos_personales(texto) if ajustes().ocultar_datos_personales else texto) or "")[:2000],
             detalle=detalle,
         )
     )
@@ -403,7 +404,10 @@ def persistir_bloque(s: Session, est: EstadoPersistencia, registros: list[Regist
             s.add(OFAparato(of_id=of_id, aparato_id=ap_id, lineas=n))
         else:
             rel.lineas += n
+    ocultar = ajustes().ocultar_datos_personales
     for p in paginas:
+        if ocultar:
+            p = {**p, "texto": ocultar_datos_personales(p.get("texto"))}
         s.add(PaginaDocumento(documento_id=est.documento_id, bloque=bloque, **p))
     est.contadores["paginas"] += len(paginas)
 
