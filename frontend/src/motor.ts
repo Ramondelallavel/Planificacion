@@ -15,6 +15,7 @@ export type EventoMotor =
   | { tipo: 'cambio' }
   | { tipo: 'guardado' }
   | { tipo: 'aviso'; mensaje: string }
+  | { tipo: 'desplazada' }
 
 let worker: Worker | null = null
 let siguiente = 1
@@ -35,7 +36,9 @@ function llamar<T>(accion: string, datos?: unknown, transferir: Transferable[] =
   })
 }
 
-export function iniciarMotor(): Promise<{ base_nueva: boolean }> {
+/** Arranca el motor. `ocupada`: los datos de este navegador están abiertos en otra pestaña; con
+ * `robar` esta pestaña se queda con ellos y la otra deja de guardar. */
+export function iniciarMotor(robar = false): Promise<{ base_nueva?: boolean; ocupada?: boolean }> {
   if (!worker) {
     worker = new Worker(new URL('motor/motor.js', document.baseURI), { type: 'module' })
     worker.onmessage = (e: MessageEvent) => {
@@ -49,7 +52,7 @@ export function iniciarMotor(): Promise<{ base_nueva: boolean }> {
     }
     worker.onerror = (e) => oyentes.forEach((f) => f({ tipo: 'aviso', mensaje: 'El motor se ha detenido: ' + (e.message || 'error desconocido') }))
   }
-  return llamar('arrancar')
+  return llamar('arrancar', { robar })
 }
 
 export function pedirMotor(metodo: string, ruta: string, cabeceras: Record<string, string>, cuerpo: Uint8Array | null): Promise<RespuestaMotor> {

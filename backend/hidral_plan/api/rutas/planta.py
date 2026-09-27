@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -14,6 +13,7 @@ from ...planificacion import servicio as sv
 from ...servicios import ejecucion as ex
 from ...servicios.auditoria import auditar
 from ..deps import UsuarioActual, ahora, get_sesion, requiere, requiere_alguno, usuario_actual
+from ..esquemas import Entrada
 
 router = APIRouter(tags=["planta"])
 
@@ -29,11 +29,11 @@ def _operario_de(u: UsuarioActual, operario_id: int | None) -> int:
 
 
 @router.get("/operario/trabajo")
-def trabajo(operario_id: int | None = None, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(usuario_actual)) -> dict:
+def trabajo(operario_id: int | None = None, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(usuario_actual)) -> dict:
     return ex.trabajo_operario(s, _operario_de(u, operario_id), ahora())
 
 
-class Iniciar(BaseModel):
+class Iniciar(Entrada):
     operacion_id: int
     operario_id: int | None = None
     recurso_id: int | None = None
@@ -41,7 +41,7 @@ class Iniciar(BaseModel):
 
 
 @router.post("/operario/iniciar")
-def iniciar(datos: Iniciar, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere_alguno("fichar", "fichar_supervisado"))) -> dict:
+def iniciar(datos: Iniciar, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere_alguno("fichar", "fichar_supervisado"))) -> dict:
     oid = _operario_de(u, datos.operario_id)
     autorizado = None
     if datos.autorizado_por:
@@ -60,34 +60,34 @@ def _fichaje_propio(s: Session, fichaje_id: int, u: UsuarioActual) -> Fichaje:
     return f
 
 
-class Pausa(BaseModel):
+class Pausa(Entrada):
     motivo: str | None = None
 
 
 @router.post("/operario/fichajes/{fichaje_id}/pausar")
-def pausar(fichaje_id: int, datos: Pausa, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere_alguno("fichar", "fichar_supervisado"))) -> dict:
+def pausar(fichaje_id: int, datos: Pausa, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere_alguno("fichar", "fichar_supervisado"))) -> dict:
     _fichaje_propio(s, fichaje_id, u)
     return ex.pausar(s, fichaje_id, u.usuario, ahora(), datos.motivo)
 
 
 @router.post("/operario/fichajes/{fichaje_id}/reanudar")
-def reanudar(fichaje_id: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere_alguno("fichar", "fichar_supervisado"))) -> dict:
+def reanudar(fichaje_id: int, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere_alguno("fichar", "fichar_supervisado"))) -> dict:
     _fichaje_propio(s, fichaje_id, u)
     return ex.reanudar(s, fichaje_id, u.usuario, ahora())
 
 
-class Terminar(BaseModel):
+class Terminar(Entrada):
     cantidad: float | None = None
     parcial: bool = False
 
 
 @router.post("/operario/fichajes/{fichaje_id}/terminar")
-def terminar(fichaje_id: int, datos: Terminar, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere_alguno("fichar", "fichar_supervisado"))) -> dict:
+def terminar(fichaje_id: int, datos: Terminar, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere_alguno("fichar", "fichar_supervisado"))) -> dict:
     _fichaje_propio(s, fichaje_id, u)
     return ex.terminar(s, fichaje_id, u.usuario, ahora(), datos.cantidad, datos.parcial)
 
 
-class IncidenciaOperario(BaseModel):
+class IncidenciaOperario(Entrada):
     operacion_id: int | None = None
     tipo: str  # AVERIA | FALTA_MATERIAL | CALIDAD | OTRA
     descripcion: str
@@ -95,7 +95,7 @@ class IncidenciaOperario(BaseModel):
 
 
 @router.post("/operario/incidencia")
-def incidencia_operario(datos: IncidenciaOperario, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("incidencias"))) -> dict:
+def incidencia_operario(datos: IncidenciaOperario, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("incidencias"))) -> dict:
     """INCIDENCIA desde la pantalla del operario: se registra y, si afecta al plan, se replanifica."""
     op = s.get(Operacion, datos.operacion_id) if datos.operacion_id else None
     recurso_id = None
@@ -126,7 +126,7 @@ def incidencia_operario(datos: IncidenciaOperario, s: Session = Depends(get_sesi
 
 
 # ------------------------------------------------------------------ incidencias (jefe de equipo)
-class Incidencia(BaseModel):
+class Incidencia(Entrada):
     tipo: str
     descripcion: str
     recurso_id: int | None = None
@@ -142,7 +142,7 @@ class Incidencia(BaseModel):
 
 
 @router.post("/incidencias")
-def registrar(datos: Incidencia, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("incidencias"))) -> dict:
+def registrar(datos: Incidencia, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("incidencias"))) -> dict:
     necesita = {"AVERIA": ("recurso_id", "la máquina averiada"), "AUSENCIA": ("operario_id", "el operario ausente"), "FALTA_MATERIAL": ("of_id", "la OF sin material"), "RETRASO": ("operacion_id", "la operación retrasada")}
     if datos.tipo in necesita and getattr(datos, necesita[datos.tipo][0]) is None:
         raise HTTPException(400, f"Para una incidencia {datos.tipo} indica {necesita[datos.tipo][1]}")
@@ -157,7 +157,7 @@ def registrar(datos: Incidencia, s: Session = Depends(get_sesion), u: UsuarioAct
 
 
 @router.get("/incidencias")
-def listar(estado: str | None = None, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def listar(estado: str | None = None, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     q = select(IncidenciaProduccion).order_by(IncidenciaProduccion.id.desc()).limit(200)
     if estado:
         q = q.where(IncidenciaProduccion.estado == estado)
@@ -174,7 +174,7 @@ def listar(estado: str | None = None, s: Session = Depends(get_sesion), _: Usuar
 
 
 @router.post("/incidencias/{inc_id}/cerrar")
-def cerrar(inc_id: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("incidencias"))) -> dict:
+def cerrar(inc_id: int, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("incidencias"))) -> dict:
     i = s.get(IncidenciaProduccion, inc_id)
     if i is None:
         raise HTTPException(404, "Incidencia inexistente")
@@ -208,13 +208,13 @@ def _visibles(u: UsuarioActual, solo_roles: bool = False):
 
 
 @router.get("/notificaciones")
-def notificaciones(solo_roles: bool = False, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(usuario_actual)) -> list[dict]:
+def notificaciones(solo_roles: bool = False, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(usuario_actual)) -> list[dict]:
     q = _visibles(u, solo_roles).order_by(Notificacion.id.desc()).limit(50)
     return [{"id": n.id, "fecha": n.fecha.isoformat(), "titulo": n.titulo, "mensaje": n.mensaje, "nivel": n.nivel, "leida": n.leida, "operario_id": n.operario_id, "rol": n.rol_destino, "referencia": n.referencia} for n in s.scalars(q)]
 
 
 @router.post("/notificaciones/leidas")
-def todas_leidas(solo_roles: bool = True, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(usuario_actual)) -> dict:
+def todas_leidas(solo_roles: bool = True, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(usuario_actual)) -> dict:
     n = 0
     for x in s.scalars(_visibles(u, solo_roles).where(Notificacion.leida.is_(False))):
         x.leida = True
@@ -223,7 +223,7 @@ def todas_leidas(solo_roles: bool = True, s: Session = Depends(get_sesion), u: U
 
 
 @router.post("/notificaciones/{nid}/leida")
-def leida(nid: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(usuario_actual)) -> dict:
+def leida(nid: int, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(usuario_actual)) -> dict:
     n = s.scalar(_visibles(u).where(Notificacion.id == nid))
     if n is None:
         raise HTTPException(404, "Aviso inexistente")

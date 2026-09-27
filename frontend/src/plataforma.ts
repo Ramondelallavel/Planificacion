@@ -85,12 +85,15 @@ export async function descargar(nombre: string, contenido: string | Blob | Uint8
   return `Descargado: ${nombre}`
 }
 
-/** CSV con separador «;» y coma decimal, como lo abre Excel en español. */
+/** CSV con separador «;» y coma decimal, como lo abre Excel en español. Un texto que empieza por
+ * =, +, -, @ o un tabulador se escribe con un apóstrofo delante: así Excel lo muestra como texto y
+ * no lo ejecuta como fórmula (los textos vienen de PDF y de lo que teclea cualquiera). */
 export function aCsv(filas: Record<string, unknown>[], columnas: [string, string][]): string {
   const celda = (v: unknown) => {
     if (v === null || v === undefined) return ''
-    const t = typeof v === 'number' ? String(v).replace('.', ',') : String(v)
-    return /[;"\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t
+    let t = typeof v === 'number' ? String(v).replace('.', ',') : String(v)
+    if (typeof v !== 'number' && /^[=+\-@\t\r]/.test(t)) t = "'" + t
+    return /[;"\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t
   }
   const cab = columnas.map(([, t]) => celda(t)).join(';')
   return '﻿' + [cab, ...filas.map((f) => columnas.map(([k]) => celda(f[k])).join(';'))].join('\r\n')
@@ -134,9 +137,23 @@ export async function crearCopia(): Promise<Copia> {
 }
 
 export async function restaurarCopia(texto: string): Promise<Copia> {
-  const c = JSON.parse(texto) as Copia
-  if (c.formato !== 'hidral-copia' || !c.bd_gzip_base64) throw new Error('El fichero no es una copia de HIDRAL.')
-  await restaurarBaseDatos(await descomprimir(deBase64(c.bd_gzip_base64)))
+  const noEs = new Error('El fichero no es una copia de HIDRAL.')
+  let c: Copia
+  try {
+    c = JSON.parse(texto) as Copia
+  } catch {
+    throw noEs
+  }
+  if (c?.formato !== 'hidral-copia' || typeof c.bd_gzip_base64 !== 'string' || !c.bd_gzip_base64) throw noEs
+  let bd: Uint8Array
+  try {
+    bd = await descomprimir(deBase64(c.bd_gzip_base64))
+  } catch {
+    throw new Error('La copia está incompleta o dañada: no se puede leer.')
+  }
+  if (typeof c.bytes_bd === 'number' && c.bytes_bd !== bd.length) throw new Error('La copia está incompleta: no tiene el tamaño con el que se guardó.')
+  // el motor comprueba además que sea una base de HIDRAL sana antes de sustituir los datos
+  await restaurarBaseDatos(bd)
   return c
 }
 

@@ -162,12 +162,52 @@ def cerrar_conexiones() -> None:
     reiniciar_motor()
 
 
+# Tablas que tiene que traer cualquier copia de HIDRAL (las demás se crean si faltan).
+TABLAS_ESENCIALES = {"usuario", "documento", "tanda", "aparato", "orden_fabricacion", "operacion", "seccion", "recurso", "plan"}
+
+
+def validar_copia(datos: Any) -> dict:
+    """Comprueba que unos bytes son una base de HIDRAL sana ANTES de sustituir la actual: una copia
+    equivocada o dañada no debe dejar a nadie sin sus datos ni sin poder entrar."""
+    import sqlite3
+    import tempfile
+
+    if hasattr(datos, "to_bytes"):
+        datos = datos.to_bytes()
+    datos = bytes(datos or b"")
+    if not datos.startswith(b"SQLite format 3\x00"):
+        raise ValueError("El fichero no contiene una base de datos de HIDRAL.")
+    with tempfile.TemporaryDirectory() as carpeta:
+        ruta = Path(carpeta) / "copia.db"
+        ruta.write_bytes(datos)
+        con = sqlite3.connect(ruta)
+        try:
+            estado = con.execute("PRAGMA integrity_check").fetchone()[0]
+            if estado != "ok":
+                raise ValueError(f"La copia está dañada ({estado}).")
+            tablas = {n for (n,) in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            faltan = TABLAS_ESENCIALES - tablas
+            if faltan:
+                raise ValueError(f"El fichero no es una base de HIDRAL (faltan: {', '.join(sorted(faltan))}).")
+            activos = con.execute("SELECT count(*) FROM usuario WHERE activo").fetchone()[0]
+            if not activos:
+                raise ValueError("La copia no tiene ningún usuario activo: nadie podría entrar.")
+            return {"usuarios": activos, "bytes": len(datos)}
+        except sqlite3.DatabaseError as e:
+            raise ValueError("La copia está dañada: la base de datos que contiene no se puede leer.") from e
+        finally:
+            con.close()
+
+
 def reabrir() -> None:
     """Tras sustituir el fichero de la base de datos (restaurar una copia)."""
-    from .db import crear_tablas, reiniciar_motor
+    from .db import crear_tablas, reiniciar_motor, sesion
+    from .servicios.privacidad import limpiar_datos_personales
 
     reiniciar_motor()
     crear_tablas()
+    with sesion() as s:
+        limpiar_datos_personales(s)
 
 
 def cargar_ejemplo(pdf: Any, nombre: str) -> dict:

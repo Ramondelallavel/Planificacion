@@ -229,8 +229,17 @@ Los adaptadores actuales leen exportaciones CSV (`AdaptadorCSV`, con mapeo de co
   es el actual, no el del token.
 - Inicio de sesión: 5 intentos fallidos en 15 minutos bloquean la cuenta ese tiempo (se cuentan en la
   auditoría). Gestión de usuarios (`/api/usuarios`, solo administrador) y cambio de la propia clave.
-- Subidas limitadas (`HIDRAL_MAX_PDF_MB`, `HIDRAL_MAX_CSV_MB`); parámetros, turnos, ausencias e
-  incidencias se validan antes de guardarse para que nada mal formado llegue al motor.
+- Subidas limitadas (`HIDRAL_MAX_PDF_MB`, `HIDRAL_MAX_CSV_MB`, `HIDRAL_MAX_PAGINAS`): una petición
+  mayor se corta con 413 antes de leerla (`LimiteCuerpo` en `api/app.py`). Parámetros, turnos,
+  ausencias e incidencias se validan antes de guardarse para que nada mal formado llegue al motor.
+- Todas las entradas heredan de `api/esquemas.Entrada`: números finitos y acotados, textos sin
+  caracteres nulos y de tamaño limitado, listas acotadas. Los errores de base de datos se traducen a
+  409/400 con un mensaje; cualquier otro, a un 500 en JSON que queda en el registro.
+- La sesión de base de datos de cada petición (`deps.get_sesion`, siempre con `scope="function"`)
+  graba **antes** de enviar la respuesta: un fallo al grabar nunca llega como «OK».
+- Concurrencia: índices únicos parciales garantizan un solo fichaje abierto por operario
+  (`uq_fichaje_abierto_por_operario`) y un solo plan oficial activo (`uq_plan_oficial_activo`),
+  aunque lleguen dos peticiones a la vez.
 - Roles y permisos (`seguridad.py`):
 
 | Rol | Permisos |
@@ -249,14 +258,27 @@ Los adaptadores actuales leen exportaciones CSV (`AdaptadorCSV`, con mapeo de co
 - **Avisos**: van a un rol o a todos los mandos (`MANDOS`); cada cual ve y marca solo los suyos.
 - **Retención de planes** (`retencion_planes`): se guardan el plan activo, los definitivos, los 15
   oficiales archivados y las 30 simulaciones más recientes; lo anterior se borra al replanificar.
-- **Esquema**: `crear_tablas` añade las columnas nuevas a tablas existentes (`db.migrar_columnas`).
+- **Esquema**: `crear_tablas` añade las columnas e índices nuevos a tablas existentes
+  (`db.migrar_columnas`).
 
 ## 7. Edición navegador y asistente
 
 `herramientas/empaquetar_navegador.py` empaqueta el mismo backend para ejecutarse en el navegador
 sobre Pyodide (WebAssembly) en un Web Worker: la interfaz habla con él como con la API (`motor.ts`
 → `navegador.py`, sin servidor HTTP), la base SQLite vive en IndexedDB y los PDF se procesan bloque
-a bloque para no bloquear la interfaz. Publicada como página de claude.ai, usa las capacidades de
+a bloque para no bloquear la interfaz.
+
+Protecciones propias de esta edición (`frontend/navegador/motor.js`):
+
+- **Una pestaña a la vez**: el worker toma un bloqueo (Web Locks, `hidral-datos`). Otra pestaña lo
+  detecta y ofrece «Usar aquí», que se lo quita a la primera; esta deja de guardar en ese momento y
+  lo avisa. Al recargar, se reintenta unos segundos mientras la página anterior suelta el bloqueo.
+- **Copias**: antes de restaurar, `navegador.validar_copia` comprueba cabecera SQLite, integridad,
+  tablas de HIDRAL y algún usuario activo; si la copia no abre, se vuelve a la base anterior.
+- **Guardado**: si IndexedDB rechaza un guardado (almacenamiento lleno), la interfaz lo muestra en
+  todas las pantallas (`EstadoMotor.tsx`), y al arrancar se pide almacenamiento persistente.
+
+Publicada como página de claude.ai, usa las capacidades de
 la plataforma: comentarios a Claude («Pedir un cambio»), copias de la base en la nube de la página,
 descargas y el **Asistente**.
 

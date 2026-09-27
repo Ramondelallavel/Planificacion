@@ -55,6 +55,7 @@ class Ajustes:
     bloque_memoria_mb: int = field(default_factory=lambda: int(os.environ.get("HIDRAL_BLOQUE_MEMORIA_MB", "64")))
     # Tamaño máximo de un PDF subido y de un CSV importado
     max_pdf_mb: int = field(default_factory=lambda: int(os.environ.get("HIDRAL_MAX_PDF_MB", "300")))
+    max_paginas: int = field(default_factory=lambda: int(os.environ.get("HIDRAL_MAX_PAGINAS", "5000")))
     max_csv_mb: int = field(default_factory=lambda: int(os.environ.get("HIDRAL_MAX_CSV_MB", "10")))
     # El texto de las páginas se guarda para auditoría; con esto, sin correos ni teléfonos
     ocultar_datos_personales: bool = field(default_factory=lambda: _bool("HIDRAL_OCULTAR_DATOS_PERSONALES", True))

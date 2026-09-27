@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -82,7 +82,7 @@ def _personal(s: Session, momento: datetime) -> dict:
 
 
 @router.get("/control-tower")
-def control_tower(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def control_tower(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     momento = ahora()
     plan = sv.plan_activo(s)
     riesgos = (plan.riesgos or {}) if plan else {}
@@ -226,7 +226,7 @@ def control_tower(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(r
 
 
 @router.get("/global")
-def global_(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def global_(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     momento = ahora()
     hoy = datetime.combine(momento.date(), datetime.min.time())
     plan = sv.plan_activo(s)
@@ -271,7 +271,7 @@ def global_(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requier
 
 
 @router.get("/seguimiento")
-def seguimiento(dias: int = 14, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def seguimiento(dias: int = Query(14, ge=1, le=366), s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     """Plan frente a real: adherencia al plan, trabajos en curso fuera de tiempo y desviaciones de
     los fichajes cerrados (por sección y tipo de operación, y las mayores)."""
     momento = ahora()

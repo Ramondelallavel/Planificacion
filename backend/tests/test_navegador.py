@@ -119,3 +119,35 @@ def test_carga_de_ejemplo_genera_plan(navegador):
     nav.preparar("secreto", (RAIZ / "config" / "fabrica_ejemplo.yaml").read_text(encoding="utf-8"), "2026-09-21T07:00:00")
     r = nav.cargar_ejemplo(PDF_REAL.read_bytes(), PDF_REAL.name)
     assert r["plan_id"]
+
+
+def test_copia_se_valida_antes_de_restaurar(navegador, tmp_path):
+    import sqlite3
+
+    nav = navegador
+    nav.preparar("secreto", (RAIZ / "config" / "fabrica_ejemplo.yaml").read_text(encoding="utf-8"), "2026-09-21T07:00:00")
+    nav.cerrar_conexiones()
+    buena = nav.RUTA_BD.read_bytes()
+    assert nav.validar_copia(buena)["usuarios"] > 0
+    # cualquier otra cosa se rechaza sin tocar los datos
+    with pytest.raises(ValueError, match="no contiene una base"):
+        nav.validar_copia(b'{"formato": "otra cosa"}')
+    with pytest.raises(ValueError, match="no contiene una base"):
+        nav.validar_copia(b"")
+    with pytest.raises(ValueError, match="dañada"):
+        nav.validar_copia(buena[: len(buena) // 2])  # copia cortada
+    ajena = tmp_path / "ajena.db"
+    with sqlite3.connect(ajena) as con:
+        con.execute("CREATE TABLE clientes (id INTEGER)")
+    with pytest.raises(ValueError, match="no es una base de HIDRAL"):
+        nav.validar_copia(ajena.read_bytes())
+    # una copia sin nadie que pueda entrar dejaría la aplicación cerrada
+    sin_usuarios = tmp_path / "sin_usuarios.db"
+    sin_usuarios.write_bytes(buena)
+    with sqlite3.connect(sin_usuarios) as con:
+        con.execute("UPDATE usuario SET activo = 0")
+    with pytest.raises(ValueError, match="ningún usuario activo"):
+        nav.validar_copia(sin_usuarios.read_bytes())
+    nav.reabrir()
+    estado, _ = _pedir(nav, "POST", "/auth/login", json_={"usuario": "admin", "clave": "hidral"})
+    assert estado == 200

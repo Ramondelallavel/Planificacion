@@ -55,6 +55,23 @@ export function onSesionCaducada(f: () => void) {
   alCaducar = f
 }
 
+/** Texto del error para la persona: el de la API, o uno claro si la respuesta no trae ninguno. */
+function mensajeError(estado: number, detalle: unknown): string {
+  if (typeof detalle === 'string' && detalle) return detalle
+  if (Array.isArray(detalle) && detalle.length) {
+    // datos rechazados por la validación: «campo: motivo»
+    const partes = detalle.slice(0, 5).map((e: { loc?: unknown[]; msg?: string }) => {
+      const campo = Array.isArray(e?.loc) ? e.loc.filter((x) => x !== 'body' && x !== 'query' && x !== 'path').join('.') : ''
+      return campo ? `${campo}: ${e?.msg ?? 'no válido'}` : (e?.msg ?? 'no válido')
+    })
+    return `Datos no válidos (${partes.join('; ')})`
+  }
+  if (estado === 413) return 'El fichero o los datos enviados son demasiado grandes.'
+  if (estado === 429) return 'Demasiados intentos. Espera unos minutos.'
+  if (estado === 502 || estado === 503 || estado === 504) return `El servidor no responde ahora mismo (error ${estado}). Inténtalo de nuevo en unos segundos.`
+  return `Error ${estado}`
+}
+
 async function peticion<T>(metodo: string, ruta: string, cuerpo?: unknown, formulario?: FormData): Promise<T> {
   const s = sesionGuardada()
   const cabeceras: Record<string, string> = {}
@@ -73,13 +90,18 @@ async function peticion<T>(metodo: string, ruta: string, cuerpo?: unknown, formu
     estado = r.estado
     texto = new TextDecoder().decode(r.cuerpo)
   } else {
-    const r = await fetch(`/api${ruta}`, {
-      method: metodo,
-      headers: cabeceras,
-      body: formulario ?? (cuerpo !== undefined ? JSON.stringify(cuerpo) : undefined),
-    })
+    let r: Response
+    try {
+      r = await fetch(`/api${ruta}`, {
+        method: metodo,
+        headers: cabeceras,
+        body: formulario ?? (cuerpo !== undefined ? JSON.stringify(cuerpo) : undefined),
+      })
+      texto = await r.text()
+    } catch (e) {
+      throw new ErrorApi(0, 'No hay conexión con el servidor. Comprueba la red e inténtalo de nuevo.', [], String(e))
+    }
     estado = r.status
-    texto = await r.text()
   }
   if (estado === 401 && ruta !== '/auth/login') {
     guardarSesion(null)
@@ -92,9 +114,8 @@ async function peticion<T>(metodo: string, ruta: string, cuerpo?: unknown, formu
     datos = texto
   }
   if (estado < 200 || estado >= 300) {
-    const d = (datos ?? {}) as { detail?: unknown; errores?: string[] }
-    const detalle = typeof d.detail === 'string' ? d.detail : `Error ${estado}`
-    throw new ErrorApi(estado, detalle, d.errores ?? [], datos)
+    const d = (datos && typeof datos === 'object' ? datos : {}) as { detail?: unknown; errores?: string[] }
+    throw new ErrorApi(estado, mensajeError(estado, d.detail), Array.isArray(d.errores) ? d.errores : [], datos)
   }
   return datos as T
 }

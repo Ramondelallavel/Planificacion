@@ -6,9 +6,8 @@ import tempfile
 from pathlib import Path
 
 import pymupdf
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -19,6 +18,7 @@ from ...modelos.comun import ahora
 from ...modelos.enums import EstadoTrabajo
 from ...servicios.auditoria import auditar
 from ..deps import UsuarioActual, get_sesion, requiere
+from ..esquemas import Entrada
 
 router = APIRouter(tags=["documentos"])
 TROZO = 1024 * 1024
@@ -46,7 +46,7 @@ def _trabajo(t: TrabajoProcesamiento) -> dict:
 
 
 @router.post("/documentos", status_code=202)
-async def cargar(fichero: UploadFile = File(...), s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("importar"))) -> dict:
+async def cargar(fichero: UploadFile = File(...), s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("importar"))) -> dict:
     """Guarda el PDF por trozos (no se carga entero en memoria), detecta duplicados y encola el
     procesamiento. Devuelve inmediatamente el estado "En cola"."""
     if not (fichero.filename or "").lower().endswith(".pdf"):
@@ -76,12 +76,12 @@ async def cargar(fichero: UploadFile = File(...), s: Session = Depends(get_sesio
 
 
 @router.get("/documentos")
-def listar(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def listar(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     return [_doc(d) for d in s.scalars(select(Documento).order_by(Documento.id.desc()).limit(200))]
 
 
 @router.delete("/documentos/{doc_id}")
-def eliminar(doc_id: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("importar"))) -> dict:
+def eliminar(doc_id: int, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("importar"))) -> dict:
     """Borra un documento que no generó ninguna tanda (con error, cancelado o vacío). Las tandas se eliminan desde la tanda."""
     from ...modelos import Tanda
     from ...servicios.tandas import eliminar_documento
@@ -101,7 +101,7 @@ def eliminar(doc_id: int, s: Session = Depends(get_sesion), u: UsuarioActual = D
 
 
 @router.get("/documentos/{doc_id}")
-def detalle(doc_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def detalle(doc_id: int, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     d = s.get(Documento, doc_id)
     if d is None:
         raise HTTPException(404, "Documento inexistente")
@@ -117,7 +117,7 @@ def detalle(doc_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = De
 
 
 @router.get("/trabajos/{trabajo_id}")
-def progreso(trabajo_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def progreso(trabajo_id: int, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     t = s.get(TrabajoProcesamiento, trabajo_id)
     if t is None:
         raise HTTPException(404, "Trabajo inexistente")
@@ -125,7 +125,7 @@ def progreso(trabajo_id: int, s: Session = Depends(get_sesion), _: UsuarioActual
 
 
 @router.post("/trabajos/{trabajo_id}/cancelar")
-def cancelar(trabajo_id: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("importar"))) -> dict:
+def cancelar(trabajo_id: int, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("importar"))) -> dict:
     t = s.get(TrabajoProcesamiento, trabajo_id)
     if t is None or t.estado not in (EstadoTrabajo.EN_COLA, EstadoTrabajo.PROCESANDO):
         raise HTTPException(400, "El trabajo no se puede cancelar")
@@ -137,8 +137,8 @@ def cancelar(trabajo_id: int, s: Session = Depends(get_sesion), u: UsuarioActual
 
 @router.get("/documentos/{doc_id}/incidencias")
 def incidencias(
-    doc_id: int, severidad: str | None = None, tipo: str | None = None, estado: str | None = None, limite: int = 500,
-    s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver")),
+    doc_id: int, severidad: str | None = None, tipo: str | None = None, estado: str | None = None, limite: int = Query(500, ge=1, le=5000),
+    s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver")),
 ) -> list[dict]:
     q = select(IncidenciaDatos).where(IncidenciaDatos.documento_id == doc_id)
     if severidad:
@@ -160,13 +160,13 @@ def incidencias(
     ]
 
 
-class Revision(BaseModel):
+class Revision(Entrada):
     estado: str  # REVISADA | RESUELTA | IGNORADA | ABIERTA
     resolucion: str | None = None
 
 
 @router.patch("/incidencias-datos/{inc_id}")
-def revisar(inc_id: int, datos: Revision, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("validar_datos"))) -> dict:
+def revisar(inc_id: int, datos: Revision, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("validar_datos"))) -> dict:
     i = s.get(IncidenciaDatos, inc_id)
     if i is None:
         raise HTTPException(404, "Incidencia inexistente")
@@ -181,7 +181,7 @@ def revisar(inc_id: int, datos: Revision, s: Session = Depends(get_sesion), u: U
 
 
 @router.get("/documentos/{doc_id}/paginas")
-def paginas(doc_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def paginas(doc_id: int, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     return [
         {"numero": p.numero, "bloque": p.bloque, "tipo": p.tipo, "metodo": p.metodo_extraccion, "caracteres": p.num_caracteres, "seccion": p.seccion_codigo, "grupo_hf": p.grupo_hf, "pagina_de": p.pagina_de, "ofs": p.ofs_detectadas, "avisos": p.avisos}
         for p in s.scalars(select(PaginaDocumento).where(PaginaDocumento.documento_id == doc_id).order_by(PaginaDocumento.numero))
@@ -189,7 +189,7 @@ def paginas(doc_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = De
 
 
 @router.get("/documentos/{doc_id}/paginas/{numero}")
-def pagina(doc_id: int, numero: int, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def pagina(doc_id: int, numero: int, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     p = s.scalar(select(PaginaDocumento).where(PaginaDocumento.documento_id == doc_id, PaginaDocumento.numero == numero))
     if p is None:
         raise HTTPException(404, "Página inexistente")
@@ -197,18 +197,23 @@ def pagina(doc_id: int, numero: int, s: Session = Depends(get_sesion), _: Usuari
 
 
 @router.get("/documentos/{doc_id}/paginas/{numero}/imagen")
-def imagen(doc_id: int, numero: int, dpi: int = 110, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> Response:
+def imagen(doc_id: int, numero: int, dpi: int = 110, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> Response:
     """Render bajo demanda de UNA página (auditoría visual de la extracción)."""
     d = s.get(Documento, doc_id)
     if d is None or not d.num_paginas or not 1 <= numero <= d.num_paginas:
         raise HTTPException(404, "Página inexistente")
-    with pymupdf.open(d.ruta_almacen) as doc:
-        png = doc.load_page(numero - 1).get_pixmap(dpi=max(50, min(dpi, 200))).tobytes("png")
+    if not Path(d.ruta_almacen).is_file():
+        raise HTTPException(404, "El PDF original ya no está en el almacén de documentos")
+    try:
+        with pymupdf.open(d.ruta_almacen) as doc:
+            png = doc.load_page(numero - 1).get_pixmap(dpi=max(50, min(dpi, 200))).tobytes("png")
+    except (RuntimeError, ValueError) as e:  # PDF dañado en el almacén
+        raise HTTPException(409, f"No se puede dibujar la página: {e}") from e
     return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
 
 
 @router.get("/trazabilidad/{entidad}/{entidad_id}")
-def trazabilidad(entidad: str, entidad_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def trazabilidad(entidad: str, entidad_id: int, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     salida = []
     for o in s.scalars(select(Origen).where(Origen.entidad_tipo == entidad.upper(), Origen.entidad_id == entidad_id).order_by(Origen.id)):
         doc = s.get(Documento, o.documento_id) if o.documento_id else None
@@ -223,7 +228,7 @@ def trazabilidad(entidad: str, entidad_id: int, s: Session = Depends(get_sesion)
 
 
 @router.get("/documentos/{doc_id}/ofs")
-def ofs_documento(doc_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def ofs_documento(doc_id: int, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     return [
         {"id": o.id, "numero": o.numero, "seccion": o.seccion_codigo, "grupo_hf": o.grupo_hf, "paginas": o.paginas, "tiene_hoja": o.tiene_hoja}
         for o in s.scalars(select(OrdenFabricacion).where(OrdenFabricacion.documento_id == doc_id).order_by(OrdenFabricacion.numero))

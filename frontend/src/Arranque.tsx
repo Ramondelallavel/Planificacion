@@ -6,7 +6,22 @@ export default function Arranque({ children }: { children: ReactNode }) {
   const [fase, setFase] = useState('Iniciando')
   const [pct, setPct] = useState(0)
   const [listo, setListo] = useState(false)
+  const [ocupada, setOcupada] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const arrancar = (robar: boolean) => {
+    setOcupada(false)
+    iniciarMotor(robar).then(
+      (r) => {
+        if (r.ocupada) setOcupada(true)
+        else {
+          setListo(true)
+          // que el navegador no borre los datos por falta de espacio (si lo permite)
+          navigator.storage?.persist?.().catch(() => {})
+        }
+      },
+      (e: Error) => setError(e.message),
+    )
+  }
   useEffect(() => {
     const quitar = onMotor((e) => {
       if (e.tipo === 'carga') {
@@ -14,10 +29,7 @@ export default function Arranque({ children }: { children: ReactNode }) {
         setPct(e.pct)
       }
     })
-    iniciarMotor().then(
-      () => setListo(true),
-      (e: Error) => setError(e.message),
-    )
+    arrancar(false)
     return () => {
       quitar()
     }
@@ -33,6 +45,19 @@ export default function Arranque({ children }: { children: ReactNode }) {
             <strong>No se pudo iniciar el motor de planificación.</strong>
             <div className="pequeno" style={{ whiteSpace: 'pre-wrap', marginTop: 6 }}>
               {error}
+            </div>
+          </div>
+        ) : ocupada ? (
+          <div className="mensaje aviso" style={{ marginTop: 18 }} role="alert">
+            <strong>HIDRAL ya está abierta en otra pestaña o ventana de este navegador.</strong>
+            <p className="pequeno">
+              Los datos se guardan en este navegador y solo una pestaña puede usarlos a la vez; si no, unos cambios pisarían a otros. Sigue en la otra pestaña, o úsala aquí: la otra
+              dejará de funcionar hasta que la recargues.
+            </p>
+            <div className="botones">
+              <button className="primario" onClick={() => arrancar(true)}>
+                Usar aquí
+              </button>
             </div>
           </div>
         ) : (

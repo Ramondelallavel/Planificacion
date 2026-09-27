@@ -73,6 +73,7 @@ export default function Datos() {
                 hidden
                 onChange={(e) => {
                   const f = e.target.files?.[0]
+                  e.target.value = '' // para poder elegir el mismo fichero otra vez
                   if (f) hacer('fichero', async () => `Copia del ${fecha((await restaurarCopia(await f.text())).fecha)} restaurada. Recargando…`, true)
                 }}
               />

@@ -102,7 +102,8 @@ cd frontend/dist-navegador && python -m http.server # y abrir http://localhost:8
 
 Es la edición que se publica como página en claude.ai: allí añade «Pedir un cambio» (envía a
 Claude un comentario sobre la pantalla actual), el **Asistente** (preguntas a Claude sobre los
-datos, con la cuenta de quien pregunta), copias automáticas en la nube de la página y descargas. Es monousuario por navegador: para un equipo que comparte datos, la edición con
+datos, con la cuenta de quien pregunta), copias automáticas en la nube de la página y descargas. Es monousuario por navegador, y solo una pestaña usa los datos a la vez (otra
+pestaña lo avisa y ofrece «Usar aquí»). Las copias se comprueban antes de restaurarlas. Para un equipo que comparte datos, la edición con
 servidor (Docker) es la adecuada. Limitaciones: sin OCR (tesseract no existe en WebAssembly) y
 pydantic en versión 2.14 beta, la primera con rueda WebAssembly publicada.
 
@@ -134,7 +135,9 @@ En desarrollo el trabajador de documentos corre en un hilo de la propia API
 | `HIDRAL_DB_URL` | SQLite en `backend/datos/hidral.db` | `postgresql+psycopg://usuario:clave@host/bd` en producción |
 | `HIDRAL_ALMACEN_DIR` | `backend/datos/almacen` | PDF originales (por SHA-256); compartido entre API y trabajadores |
 | `HIDRAL_SECRETO` | aleatorio, guardado en `datos/.secreto` | Firma de sesiones. En producción, fíjalo (y compártelo entre réplicas) |
-| `HIDRAL_MAX_PDF_MB` / `HIDRAL_MAX_CSV_MB` | `300` / `10` | Tamaño máximo de un PDF subido y de un CSV importado |
+| `HIDRAL_MAX_PDF_MB` / `HIDRAL_MAX_CSV_MB` | `300` / `10` | Tamaño máximo de un PDF subido y de un CSV importado. Una petición mayor se corta (413) antes de leerla |
+| `HIDRAL_MAX_PAGINAS` | `5000` | Páginas como máximo por PDF; uno mayor queda en ERROR con el motivo |
+| `HIDRAL_OCULTAR_DATOS_PERSONALES` | `1` | `0` para guardar el texto de las páginas sin ocultar correos ni teléfonos |
 | `HIDRAL_TOKEN_HORAS` | `12` | Duración de la sesión |
 | `HIDRAL_BLOQUE_MIN` / `_MAX` / `_MEMORIA_MB` | `5` / `50` / `64` | Límites del tamaño adaptativo de bloque |
 | `HIDRAL_OCR` | `auto` | `auto`: OCR solo en páginas sin texto · `off`: nunca |
@@ -169,6 +172,10 @@ Los tests con el PDF real (`tests/test_pdf_real.py`) se omiten si el fichero no 
 - Tras 5 intentos fallidos una cuenta queda bloqueada 15 minutos (queda en la auditoría).
 - Cada cual cambia su contraseña desde el menú; el administrador gestiona usuarios y roles en
   Configuración → Usuarios y accesos (no se puede quitar el último administrador).
+- Todas las entradas se validan (tipo, rango y tamaño) y lo que no vale se rechaza con un mensaje; la
+  base de datos impide además los resultados imposibles aunque lleguen dos peticiones a la vez (dos
+  trabajos abiertos para un operario, dos planes oficiales activos).
+- Al exportar a CSV, los textos que Excel tomaría por una fórmula se escriben como texto.
 - Los usuarios de ejemplo (clave `hidral`) son solo para demostración: cámbiales la clave o dalos de
   baja antes de usar la aplicación con datos reales.
 

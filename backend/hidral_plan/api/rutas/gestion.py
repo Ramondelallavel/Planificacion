@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,6 +14,7 @@ from ...integraciones.adaptadores import IMPORTADORES, AdaptadorCSV
 from ...modelos import Auditoria, EstimacionPropuesta, TiempoEstandar
 from ...servicios import ejecucion as ex
 from ..deps import UsuarioActual, get_sesion, requiere
+from ..esquemas import Entrada
 
 router = APIRouter(tags=["gestión"])
 
@@ -22,7 +22,7 @@ router = APIRouter(tags=["gestión"])
 @router.get("/auditoria")
 def auditoria(
     accion: str | None = None, entidad_tipo: str | None = None, entidad_id: str | None = None, usuario: str | None = None, desde: datetime | None = None,
-    limite: int = 200, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver")),
+    limite: int = Query(200, ge=1, le=2000), s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver")),
 ) -> list[dict]:
     q = select(Auditoria).order_by(Auditoria.id.desc())
     if accion:
@@ -48,7 +48,7 @@ def maestro(_: UsuarioActual = Depends(requiere("ver"))) -> dict:
 
 @router.post("/integraciones/{sistema}/importar")
 async def importar(
-    sistema: str, fichero: UploadFile = File(...), mapeo_columnas: str | None = Form(None), s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("configurar")),
+    sistema: str, fichero: UploadFile = File(...), mapeo_columnas: str | None = Form(None), s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("configurar")),
 ) -> dict:
     """Importa una exportación CSV del sistema indicado (ortems | mrp | teamcenter)."""
     if sistema not in IMPORTADORES:
@@ -64,12 +64,12 @@ async def importar(
 
 
 @router.post("/aprendizaje/proponer")
-def proponer(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("aprobar_estimaciones"))) -> list[dict]:
+def proponer(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("aprobar_estimaciones"))) -> list[dict]:
     return ex.proponer_estimaciones(s)
 
 
 @router.get("/aprendizaje/propuestas")
-def propuestas(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def propuestas(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     salida = []
     for p in s.scalars(select(EstimacionPropuesta).order_by(EstimacionPropuesta.id.desc()).limit(100)):
         te = s.get(TiempoEstandar, p.tiempo_estandar_id)
@@ -83,15 +83,15 @@ def propuestas(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requ
     return salida
 
 
-class DecisionEstimacion(BaseModel):
+class DecisionEstimacion(Entrada):
     aprobar: bool
 
 
 @router.post("/aprendizaje/propuestas/{pid}/decidir")
-def decidir(pid: int, datos: DecisionEstimacion, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("aprobar_estimaciones"))) -> dict:
+def decidir(pid: int, datos: DecisionEstimacion, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("aprobar_estimaciones"))) -> dict:
     return ex.decidir_estimacion(s, pid, datos.aprobar, u.usuario)
 
 
 @router.post("/tiempos-estandar/{te_id}/revertir")
-def revertir(te_id: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("aprobar_estimaciones"))) -> dict:
+def revertir(te_id: int, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("aprobar_estimaciones"))) -> dict:
     return ex.revertir_tiempo_estandar(s, te_id, u.usuario)

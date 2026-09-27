@@ -2,7 +2,7 @@
 
 ```bash
 cd backend
-python -m pytest                        # 93 pruebas; SQLite temporal por prueba
+python -m pytest                        # 106 pruebas; SQLite temporal por prueba
 HIDRAL_TEST_DB_URL=postgresql+psycopg://usuario@host/bd_pruebas python -m pytest   # misma batería en PostgreSQL (vacía esa base)
 ```
 
@@ -126,6 +126,22 @@ Zonas que no cubría ninguna otra prueba y las protecciones añadidas tras la au
 | `test_ocultar_datos_personales` | las líneas con teléfono o correo se ocultan; códigos de artículo, OF y parámetros no se tocan |
 | `test_limpieza_unica_de_bases_anteriores` | una base con datos de contacto se limpia una sola vez |
 
+## Robustez (`tests/test_robustez.py`)
+
+Segunda pasada de la auditoría ([AUDITORIA.md](AUDITORIA.md#segunda-pasada-robustez)): lo que no
+sale usando la aplicación con normalidad.
+
+| Prueba | Qué se comprueba |
+|---|---|
+| `test_ninguna_ruta_da_error_500` | más de 1800 peticiones generadas desde la descripción OpenAPI (valores extremos, NaN, infinito, fechas imposibles, caracteres nulos, inyecciones, ficheros hostiles) sobre todas las rutas: ninguna acaba en error 500 |
+| `test_sin_sesion_nada_responde` | todas las rutas, sin token y con uno falso, responden 401 o 422 |
+| `test_si_falla_al_grabar_no_se_responde_ok` | si la grabación falla, la respuesta es un error (409) y no un «OK» |
+| `test_login_no_distingue_usuario_inexistente_por_tiempo` | el inicio de sesión tarda lo mismo exista o no el usuario |
+| `test_dos_peticiones_a_la_vez_no_dejan_datos_imposibles` | dos sesiones simultáneas no dejan dos trabajos abiertos para un operario ni dos planes oficiales activos |
+| `test_pdf_hostiles_no_rompen_nada` (5 casos) | PDF cifrado, de 0 bytes, cortado, que no es PDF y en blanco: estado claro y la aplicación sigue planificando |
+| `test_pdf_con_demasiadas_paginas_se_rechaza` | por encima de `HIDRAL_MAX_PAGINAS`, documento en ERROR con el motivo y sin trabajo en cola |
+| `test_peticion_demasiado_grande_se_corta` | 413 antes de leer la petición, también sin `Content-Length`; lo normal sigue entrando |
+
 ## Edición navegador (`tests/test_navegador.py`)
 
 | Prueba | Qué se comprueba |
@@ -134,6 +150,10 @@ Zonas que no cubría ninguna otra prueba y las protecciones añadidas tras la au
 | `test_api_completa_sin_servidor_ni_hilos` | la API entera a través del adaptador sin HTTP ni hilos: login, subida multipart, procesamiento paso a paso, plan, imagen de página, cierre y reapertura |
 | `test_procesamiento_limitado_por_bloques` | cada paso procesa un solo bloque y el trabajo se completa en varios |
 | `test_carga_de_ejemplo_genera_plan` | la tanda de ejemplo se carga y genera el plan inicial (se omite sin el PDF real) |
+| `test_copia_se_valida_antes_de_restaurar` | una copia que no es SQLite, está cortada, es de otra aplicación o no tiene usuarios activos se rechaza sin tocar los datos |
+
+Las dos pestañas a la vez y la restauración de copias no válidas se prueban además en Chromium sobre
+la página compilada (ver [AUDITORIA.md](AUDITORIA.md#segunda-pasada-robustez)).
 
 Además, `tests/test_unitarios.py` cubre números en formato español, parámetros, semana desde `S40`,
 ventanas de turno con pausas y fin de semana, reparto de operaciones entre turnos, paradas,
@@ -141,7 +161,7 @@ ocupación y seguridad (hash de contraseñas y tokens).
 
 ## Resultados de referencia
 
-- 93 pruebas superadas en SQLite y en PostgreSQL 16.
+- 106 pruebas superadas en SQLite y en PostgreSQL 16.
 - Tanda 2210: 99 páginas en 2 bloques (~1,6 s en el entorno de pruebas), 130 OF con hoja propia más
   9 referenciadas sin hoja, 970 líneas, 2 aparatos, 36 bultos, 149 dependencias, 0 ciclos. Con la fábrica de
   ejemplo: 140 operaciones planificadas y 8 no planificables, todas explicadas (sección `PLPINO`

@@ -2,7 +2,7 @@
 
 Revisión completa de la aplicación: backend, interfaz y edición navegador. Este documento recoge
 qué se miró, qué se encontró y qué se cambió. Todos los arreglos llevan pruebas
-(`backend/tests/test_auditoria.py`).
+(`backend/tests/test_auditoria.py`). La segunda pasada, centrada en la robustez, está al final.
 
 ## Cómo se ha hecho
 
@@ -60,14 +60,46 @@ consecuencias claras; **baja**, detalles.
 | U4 | media | Pantalla del operario: el botón INICIAR aparecía verde aunque la operación estaba bloqueada, y el motivo se mostraba como un error | Motivo como aviso. El operario ve «INICIAR (necesita autorización)», desactivado; el jefe de equipo ve «INICIAR CON AUTORIZACIÓN» |
 | U5 | baja | Botón «Entrar» sin tipo explícito | Corregido |
 
+## Segunda pasada: robustez
+
+Después de la auditoría se buscaron a propósito los fallos que no salen usando la aplicación con
+normalidad: valores extremos, peticiones simultáneas, ficheros hostiles y los límites de la edición
+navegador. Las pruebas están en `backend/tests/test_robustez.py` y `backend/tests/test_navegador.py`.
+
+| Paso | Cómo | Resultado |
+|---|---|---|
+| Valores extremos en todas las rutas | Generador que lee la descripción OpenAPI de la API y manda a cada ruta, campo a campo: enteros enormes y negativos, NaN, infinito, ±10³⁰⁸, fechas imposibles o de los años 1 y 9999, textos de 5000 caracteres, caracteres nulos, inyección SQL y de HTML, rutas `../`, identificadores inexistentes, cuerpos vacíos o que no son un objeto y ficheros hostiles (vacíos, basura, nombres con `../`, CSV con NaN) | 220 errores internos (500) al empezar; **0 en 1828 peticiones** al terminar, en SQLite y en PostgreSQL 16 |
+| Acceso sin sesión | Todas las rutas (salvo el inicio de sesión y la de salud) sin token y con un token falso | todas responden 401 o 422; ninguna da datos |
+| Peticiones simultáneas | Dos sesiones de base de datos que hacen lo mismo a la vez | la base de datos impide el resultado imposible; ver R3 |
+| PDF hostiles | Cifrado, de 0 bytes, cortado a la mitad, que no es PDF, solo páginas en blanco, con demasiadas páginas | todos acaban en un estado claro (ERROR con el motivo, o sin datos) y la aplicación sigue funcionando |
+| Edición navegador | Chromium: dos pestañas a la vez, copias no válidas (no JSON, otro JSON, comprimido roto, base cortada, cabecera falsa), una copia buena, 6 recargas seguidas | ver R7–R10; 0 errores de consola |
+
+| # | Gravedad | Hallazgo | Arreglo |
+|---|---|---|---|
+| R1 | alta | La base de datos se grababa **después** de enviar la respuesta: si la grabación fallaba (por ejemplo, por un dato duplicado), la pantalla ya había dicho «guardado» | Se graba antes de responder; un fallo al grabar llega como error |
+| R2 | media | Valores extremos rompían rutas con un error interno: enteros enormes, fechas fuera de rango, NaN o infinito en cantidades, caracteres nulos, códigos de sección o turno inexistentes, un CSV con un separador desconocido, la página de un PDF borrado del almacén | Validación común de todas las entradas (enteros de 32 bits, números finitos hasta 10⁹, textos de hasta 4000 caracteres sin caracteres nulos, listas de hasta 5000 elementos) y límites en los parámetros de consulta. Mensajes claros (400, 404, 409) que dicen qué falta, por ejemplo «No existe la sección X. Créala antes en Configuración → Secciones», y nueva opción para crear secciones. Cualquier error imprevisto responde un mensaje en JSON y queda en el registro |
+| R3 | media | Dos peticiones a la vez podían dejar a un operario con dos trabajos abiertos, o dos planes oficiales activos | Índices únicos en la base de datos: la segunda petición recibe un 409 que lo explica («Otra persona está generando el plan…») |
+| R4 | media | No había límite de páginas: un PDF enorme ocupaba el procesamiento (y en el navegador, la memoria) sin control | Límite de páginas (5000, `HIDRAL_MAX_PAGINAS`); el documento queda en ERROR con el motivo |
+| R5 | baja | El inicio de sesión respondía antes cuando el usuario no existía: se podía averiguar qué usuarios existen | Mismo cálculo exista o no el usuario |
+| R6 | media | La edición con servidor leía peticiones de cualquier tamaño antes de comprobarlas | Se cortan con un 413 antes de leerlas (también si llegan por trozos, sin tamaño declarado) |
+| R7 | media | Edición navegador: dos pestañas abiertas guardaban sobre los mismos datos y los cambios de una pisaban los de la otra | Solo una pestaña usa los datos. La segunda lo explica y ofrece «Usar aquí»; la primera deja de guardar al momento, lo avisa y permite descargar una copia de lo que tenía |
+| R8 | media | Edición navegador: restaurar un fichero equivocado o dañado sustituía los datos y podía dejar la aplicación sin poder entrar | Antes de tocar nada se comprueban el formato, el tamaño, la integridad de la base, que sea de HIDRAL y que tenga algún usuario activo. Si aun así no abre, se vuelve a los datos anteriores |
+| R9 | media | Edición navegador: si el navegador no podía guardar (almacenamiento lleno), el aviso no se mostraba en ningún sitio | Aviso visible en todas las pantallas, con qué hacer; además se pide al navegador que no borre los datos por falta de espacio |
+| R10 | baja | Edición navegador: los errores del motor llegaban a la pantalla con toda la traza de Python | Solo el mensaje; la traza, en la consola |
+| R11 | baja | Al exportar a CSV, un texto que empieza por `=`, `+`, `-` o `@` (de un PDF o tecleado por cualquiera) Excel lo ejecutaba como fórmula | Se exporta con un apóstrofo delante: Excel lo muestra como texto |
+| R12 | baja | Si una pantalla fallaba al dibujarse, la aplicación entera se quedaba en blanco | Cada pantalla tiene su barrera: aviso con «Reintentar» y el resto sigue funcionando |
+| R13 | baja | Errores poco claros en la interfaz: «Failed to fetch» sin conexión, «Error 422» con datos no válidos | «No hay conexión con el servidor…», el campo y el motivo de lo rechazado, y textos para 413, 429 y 502–504 |
+| R14 | baja | Las bases ya existentes no recibían los índices nuevos (solo las columnas) | Al arrancar se crean también los índices que falten |
+
 ## Lo que queda (recomendaciones, sin implementar)
 
 - **Migraciones formales** (Alembic) si alguna vez hay que renombrar columnas o cambiarles el tipo.
   Hoy solo se añaden columnas.
 - **Inicio de sesión corporativo** (Microsoft Entra ID o LDAP) y doble factor para la instalación con
   servidor.
-- **HTTPS y límite de peticiones** en el proxy que publique la aplicación (nginx, Traefik…).
-- **Edición navegador**: sigue siendo de una sola persona por navegador. Para un equipo, la edición
-  con servidor.
+- **HTTPS y límite de peticiones por minuto** en el proxy que publique la aplicación (nginx,
+  Traefik…). La aplicación ya limita el tamaño de cada petición y los intentos de inicio de sesión.
+- **Edición navegador**: sigue siendo de una sola persona y una sola pestaña por navegador. Para un
+  equipo, la edición con servidor.
 - Los avisos de mypy son ruido, pero tiparlos del todo evitaría que un fallo real se esconda entre
   ellos.

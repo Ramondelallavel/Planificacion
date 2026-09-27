@@ -316,6 +316,7 @@ def generar_plan(
     if anterior:
         bloqueadas_prev = {a.operacion_id for a in s.scalars(select(AsignacionPlan).where(AsignacionPlan.plan_id == anterior.id, AsignacionPlan.bloqueada.is_(True)))}
         anterior.estado = EstadoPlan.ARCHIVADO
+        s.flush()  # antes de crear el nuevo: solo puede haber un plan oficial activo (índice único)
     plan = Plan(
         nombre=nombre or f"Plan {ahora:%d/%m/%Y %H:%M}",
         tipo=TipoPlan.OFICIAL,
@@ -609,6 +610,7 @@ def decidir_simulacion(s: Session, sim_id: int, aceptar: bool, usuario: str, mot
         kpis=base.kpis,
     )
     base.estado = EstadoPlan.ARCHIVADO
+    s.flush()  # solo puede haber un plan oficial activo (índice único)
     s.add(nuevo)
     s.flush()
     bloqueadas = {a.operacion_id for a in s.scalars(select(AsignacionPlan).where(AsignacionPlan.plan_id == base.id, AsignacionPlan.bloqueada.is_(True)))}

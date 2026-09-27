@@ -5,8 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -17,11 +16,12 @@ from ...planificacion import servicio as sv
 from ...planificacion.calendario import turno_desde_modelo, ventanas_turno
 from ...planificacion.modelo import cargar_instantanea, limite_semana
 from ..deps import UsuarioActual, ahora, get_sesion, requiere
+from ..esquemas import Entrada
 
 router = APIRouter(prefix="/plan", tags=["plan"])
 
 
-class Generar(BaseModel):
+class Generar(Entrada):
     nombre: str | None = None
     definitivo: bool = False
     tanda_ids: list[int] | None = None
@@ -29,17 +29,17 @@ class Generar(BaseModel):
 
 
 @router.post("/comprobaciones")
-def comprobaciones(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def comprobaciones(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     return sv.comprobaciones_previas(s, cargar_instantanea(s, ahora()))
 
 
 @router.post("/generar")
-def generar(datos: Generar, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
+def generar(datos: Generar, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
     return sv.generar_plan(s, u.usuario, ahora(), datos.nombre, datos.definitivo, datos.tanda_ids, datos.motivo)
 
 
 @router.get("/activo")
-def activo(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def activo(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     r = sv.resumen_plan(s)
     if r is None:
         return {"plan_id": None}
@@ -51,7 +51,7 @@ def activo(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere
 
 
 @router.get("/activo/no-planificadas")
-def no_planificadas(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def no_planificadas(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     plan = sv.plan_activo(s)
     return plan.no_planificadas or [] if plan else []
 
@@ -96,7 +96,7 @@ def _calendario(s: Session) -> tuple[set[date], dict[str, set[date]]]:
 @router.get("/activo/gantt")
 def gantt(
     desde: datetime | None = None, hasta: datetime | None = None, seccion: str | None = None, tanda_id: int | None = None, recurso_id: int | None = None,
-    s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver")),
+    s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver")),
 ) -> dict:
     plan = sv.plan_activo(s)
     if plan is None:
@@ -135,7 +135,7 @@ def gantt(
 
 
 @router.get("/activo/capacidad")
-def capacidad(dias: int = 14, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def capacidad(dias: int = Query(14, ge=1, le=42), s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     """Ocupación planificada frente a capacidad real (turnos, jornadas extra, festivos, paradas),
     por recurso y día, y agregada por sección."""
     plan = sv.plan_activo(s)
@@ -168,7 +168,7 @@ def capacidad(dias: int = 14, s: Session = Depends(get_sesion), _: UsuarioActual
 
 
 @router.get("/activo/turnos")
-def plan_por_turno(dia: date | None = None, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def plan_por_turno(dia: date | None = None, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     """Plan diario por turno: TURNO → operario → máquina → OF (punto 17-18)."""
     plan = sv.plan_activo(s)
     dia = dia or ahora().date()
@@ -202,7 +202,7 @@ def plan_por_turno(dia: date | None = None, s: Session = Depends(get_sesion), _:
 
 
 @router.get("/activo/cambios")
-def cambios(limite: int = 200, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def cambios(limite: int = Query(200, ge=1, le=2000), s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     """Registro de cambios (ANTES / DESPUÉS / MOTIVO / IMPACTO) de los planes oficiales."""
     planes = [p.id for p in s.scalars(select(Plan).where(Plan.tipo == TipoPlan.OFICIAL))]
     return [
@@ -216,7 +216,7 @@ def cambios(limite: int = 200, s: Session = Depends(get_sesion), _: UsuarioActua
 
 
 @router.get("/asignaciones/{operacion_id}")
-def asignacion(operacion_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def asignacion(operacion_id: int, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     plan = sv.plan_activo(s)
     a = s.scalar(select(AsignacionPlan).where(AsignacionPlan.plan_id == plan.id, AsignacionPlan.operacion_id == operacion_id)) if plan else None
     if a is None:
@@ -225,7 +225,7 @@ def asignacion(operacion_id: int, s: Session = Depends(get_sesion), _: UsuarioAc
     return {**_asig_json(a, of, s.get(Operacion, a.operacion_id), s.get(Recurso, a.recurso_id) if a.recurso_id else None, s.get(Operario, a.operario_id) if a.operario_id else None, s.get(Aparato, of.aparato_id) if of.aparato_id else None, s.get(Tanda, of.tanda_id) if of.tanda_id else None), "explicacion": a.explicacion}
 
 
-class Mover(BaseModel):
+class Mover(Entrada):
     inicio: datetime | None = None
     recurso_id: int | None = None
     operario_id: int | None = None
@@ -234,7 +234,7 @@ class Mover(BaseModel):
 
 
 @router.post("/asignaciones/{operacion_id}/mover")
-def mover(operacion_id: int, datos: Mover, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
+def mover(operacion_id: int, datos: Mover, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
     """Arrastre en el Gantt / cambio de recurso u operario. Pasa SIEMPRE por el motor de restricciones."""
     try:
         return sv.mover_asignacion(s, operacion_id, u.usuario, ahora(), datos.inicio, datos.recurso_id, datos.operario_id, datos.motivo, datos.bloquear)
@@ -243,61 +243,61 @@ def mover(operacion_id: int, datos: Mover, s: Session = Depends(get_sesion), u: 
         raise
 
 
-class Bloquear(BaseModel):
+class Bloquear(Entrada):
     bloqueada: bool
     motivo: str | None = None
 
 
 @router.post("/asignaciones/{operacion_id}/bloquear")
-def bloquear(operacion_id: int, datos: Bloquear, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
+def bloquear(operacion_id: int, datos: Bloquear, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
     sv.bloquear(s, operacion_id, datos.bloqueada, u.usuario, datos.motivo)
     return {"operacion_id": operacion_id, "bloqueada": datos.bloqueada}
 
 
 # ------------------------------------------------------------------ simulaciones
-class Urgente(BaseModel):
+class Urgente(Entrada):
     of_id: int
     motivo: str | None = None
 
 
 @router.post("/simulaciones/of-urgente")
-def of_urgente(datos: Urgente, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
+def of_urgente(datos: Urgente, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
     return sv.simular_of_urgente(s, datos.of_id, u.usuario, ahora(), datos.motivo)
 
 
-class Decision(BaseModel):
+class Decision(Entrada):
     aceptar: bool
     motivo: str | None = None
 
 
 @router.post("/simulaciones/{sim_id}/decidir")
-def decidir(sim_id: int, datos: Decision, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
+def decidir(sim_id: int, datos: Decision, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
     return sv.decidir_simulacion(s, sim_id, datos.aceptar, u.usuario, datos.motivo)
 
 
-class Escenario(BaseModel):
+class Escenario(Entrada):
     escenario: dict
     guardar: bool = True
 
 
 @router.post("/simulaciones/escenario")
-def escenario(datos: Escenario, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("simular"))) -> dict:
+def escenario(datos: Escenario, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("simular"))) -> dict:
     return sv.simular_escenario(s, datos.escenario, u.usuario, ahora(), datos.guardar)
 
 
-class AplicarEscenario(BaseModel):
+class AplicarEscenario(Entrada):
     escenario: dict
     motivo: str | None = None
 
 
 @router.post("/simulaciones/escenario/aplicar")
-def aplicar_escenario(datos: AplicarEscenario, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
+def aplicar_escenario(datos: AplicarEscenario, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
     """Hace reales las decisiones del escenario (turnos extra, OF adelantadas, pesos) y replanifica."""
     return sv.aplicar_escenario(s, datos.escenario, u.usuario, ahora(), datos.motivo)
 
 
 @router.get("/simulaciones")
-def simulaciones(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def simulaciones(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     return [
         {
             "id": p.id, "nombre": p.nombre, "estado": p.estado, "creado": p.creado.isoformat(), "creado_por": p.creado_por, "escenario": p.escenario, "motivo": p.motivo,
@@ -308,7 +308,7 @@ def simulaciones(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(re
 
 
 @router.get("/historico")
-def historico(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def historico(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     return [
         {"id": p.id, "nombre": p.nombre, "estado": p.estado, "creado": p.creado.isoformat(), "creado_por": p.creado_por, "definitivo": p.definitivo, "motivo": p.motivo, "kpis": p.kpis}
         for p in s.scalars(select(Plan).where(Plan.tipo == TipoPlan.OFICIAL).order_by(Plan.id.desc()).limit(50))

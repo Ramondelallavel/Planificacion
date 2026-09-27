@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -29,6 +28,7 @@ from ...planificacion import servicio as sv
 from ...servicios import tandas as gt
 from ...servicios.auditoria import auditar
 from ..deps import UsuarioActual, ahora, get_sesion, requiere
+from ..esquemas import Entrada
 
 router = APIRouter(tags=["estructura"])
 
@@ -47,7 +47,7 @@ def _of_resumen(o: OrdenFabricacion) -> dict:
 
 
 @router.get("/tandas")
-def tandas(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def tandas(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     salida = []
     for t in s.scalars(select(Tanda).order_by(Tanda.semana_codigo, Tanda.numero)):
         n_of = s.scalar(select(func.count(OrdenFabricacion.id)).where(OrdenFabricacion.tanda_id == t.id, OrdenFabricacion.tiene_hoja.is_(True)))
@@ -62,7 +62,7 @@ def tandas(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere
     return salida
 
 
-class CambioTanda(BaseModel):
+class CambioTanda(Entrada):
     incluida_en_plan: bool | None = None
     estado: str | None = None
     producto: str | None = None
@@ -74,7 +74,7 @@ ESTADOS_TANDA = {"ACTIVA", "ARCHIVADA", "CERRADA"}
 
 
 @router.patch("/tandas/{tanda_id}")
-def cambiar_tanda(tanda_id: int, datos: CambioTanda, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
+def cambiar_tanda(tanda_id: int, datos: CambioTanda, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
     t = s.get(Tanda, tanda_id)
     if t is None:
         raise HTTPException(404, "Tanda inexistente")
@@ -99,7 +99,7 @@ def cambiar_tanda(tanda_id: int, datos: CambioTanda, s: Session = Depends(get_se
 
 
 @router.delete("/tandas/{tanda_id}")
-def eliminar_tanda(tanda_id: int, motivo: str | None = None, replanificar: bool = True, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
+def eliminar_tanda(tanda_id: int, motivo: str | None = None, replanificar: bool = True, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
     """Elimina la tanda y todo lo que salió de su PDF; después regenera el plan activo."""
     try:
         r = gt.eliminar_tanda(s, tanda_id, u.usuario, motivo)
@@ -115,13 +115,13 @@ def eliminar_tanda(tanda_id: int, motivo: str | None = None, replanificar: bool 
     return r
 
 
-class CambioAparato(BaseModel):
+class CambioAparato(Entrada):
     semana: str
     motivo: str | None = None
 
 
 @router.patch("/aparatos/{ap_id}")
-def cambiar_aparato(ap_id: int, datos: CambioAparato, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
+def cambiar_aparato(ap_id: int, datos: CambioAparato, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
     ap = s.get(Aparato, ap_id)
     if ap is None:
         raise HTTPException(404, "Aparato inexistente")
@@ -132,7 +132,7 @@ def cambiar_aparato(ap_id: int, datos: CambioAparato, s: Session = Depends(get_s
 
 
 @router.get("/tandas/{tanda_id}")
-def tanda(tanda_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def tanda(tanda_id: int, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     t = s.get(Tanda, tanda_id)
     if t is None:
         raise HTTPException(404, "Tanda inexistente")
@@ -165,7 +165,7 @@ def tanda(tanda_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = De
 
 
 @router.get("/aparatos/{ap_id}")
-def aparato(ap_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def aparato(ap_id: int, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     a = s.get(Aparato, ap_id)
     if a is None:
         raise HTTPException(404, "Aparato inexistente")
@@ -194,7 +194,7 @@ def aparato(ap_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = Dep
 @router.get("/ofs")
 def ofs(
     tanda_id: int | None = None, aparato_id: int | None = None, seccion: str | None = None, estado: str | None = None, riesgo: str | None = None,
-    q: str | None = None, limite: int = 200, desplazamiento: int = 0, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver")),
+    q: str | None = None, limite: int = Query(200, ge=1, le=2000), desplazamiento: int = Query(0, ge=0, le=10_000_000), s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver")),
 ) -> dict:
     consulta = select(OrdenFabricacion)
     if tanda_id:
@@ -216,7 +216,7 @@ def ofs(
 
 
 @router.get("/ofs/{of_id}")
-def of_detalle(of_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def of_detalle(of_id: int, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     o = s.get(OrdenFabricacion, of_id)
     if o is None:
         raise HTTPException(404, "OF inexistente")
@@ -273,7 +273,7 @@ def of_detalle(of_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = 
     }
 
 
-class CambioOF(BaseModel):
+class CambioOF(Entrada):
     urgente: bool | None = None
     bloqueada: bool | None = None
     material_disponible: bool | None = None
@@ -284,7 +284,7 @@ class CambioOF(BaseModel):
 
 
 @router.patch("/ofs/{of_id}")
-def cambiar_of(of_id: int, datos: CambioOF, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
+def cambiar_of(of_id: int, datos: CambioOF, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
     o = s.get(OrdenFabricacion, of_id)
     if o is None:
         raise HTTPException(404, "OF inexistente")
@@ -305,7 +305,7 @@ def cambiar_of(of_id: int, datos: CambioOF, s: Session = Depends(get_sesion), u:
     return _of_resumen(o)
 
 
-class Prioridad(BaseModel):
+class Prioridad(Entrada):
     tanda_id: int | None = None
     aparato_id: int | None = None
     urgente: bool = True
@@ -313,7 +313,7 @@ class Prioridad(BaseModel):
 
 
 @router.post("/prioridad")
-def prioridad(datos: Prioridad, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
+def prioridad(datos: Prioridad, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
     """Prioriza (o deja de priorizar) de una vez todas las OF abiertas de una tanda o de un aparato.
 
     Solo marca las OF como urgentes: el plan cambia al replanificar, como con una OF suelta.
@@ -341,19 +341,19 @@ def prioridad(datos: Prioridad, s: Session = Depends(get_sesion), u: UsuarioActu
     return {"cambiadas": len(cambiadas), "urgente": datos.urgente}
 
 
-class Programa(BaseModel):
+class Programa(Entrada):
     codigo: str
     recurso_codigo: str | None = None
     notas: str | None = None
 
 
 @router.post("/ofs/{of_id}/programa")
-def programa(of_id: int, datos: Programa, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
+def programa(of_id: int, datos: Programa, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
     return sv.registrar_programa(s, of_id, datos.codigo, u.usuario, datos.recurso_codigo, datos.notas)
 
 
 @router.get("/operaciones/{op_id}")
-def operacion(op_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def operacion(op_id: int, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     op = s.get(Operacion, op_id)
     if op is None:
         raise HTTPException(404, "Operación inexistente")
@@ -361,8 +361,10 @@ def operacion(op_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = D
 
 
 @router.get("/ofs/{of_id}/grafo")
-def grafo(of_id: int, profundidad: int = 2, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def grafo(of_id: int, profundidad: int = Query(2, ge=1, le=5), s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     """Subgrafo de dependencias alrededor de una OF (para el visor de relaciones)."""
+    if s.get(OrdenFabricacion, of_id) is None:
+        raise HTTPException(404, "OF inexistente")
     nodos: dict[int, dict] = {}
     aristas: list[dict] = []
     frontera = {of_id}
@@ -387,7 +389,7 @@ def grafo(of_id: int, profundidad: int = 2, s: Session = Depends(get_sesion), _:
 
 
 @router.get("/bultos/{bulto_id}")
-def bulto(bulto_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def bulto(bulto_id: int, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     b = s.get(Bulto, bulto_id)
     if b is None:
         raise HTTPException(404, "Bulto inexistente")
@@ -398,7 +400,7 @@ def bulto(bulto_id: int, s: Session = Depends(get_sesion), _: UsuarioActual = De
 
 # ------------------------------------------------------------------ búsqueda global
 @router.get("/buscar")
-def buscar(q: str, limite: int = 30, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def buscar(q: str = Query(..., max_length=200), limite: int = Query(30, ge=1, le=100), s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     """Busca en OF, tandas, aparatos, artículos, máquinas y operarios. Devuelve adónde ir en la interfaz."""
     q = q.strip()
     if len(q) < 2:

@@ -4,6 +4,8 @@ import { guardarSesion, onSesionCaducada, puede, sesionGuardada, type Sesion } f
 import Avisos from './componentes/Avisos'
 import Buscador from './componentes/Buscador'
 import CambiarClave from './componentes/CambiarClave'
+import EstadoMotor from './componentes/EstadoMotor'
+import Fallo from './componentes/Fallo'
 import PedirCambio from './componentes/PedirCambio'
 import { NAVEGADOR, onMotor } from './motor'
 import Datos from './paginas/Datos'
@@ -170,6 +172,7 @@ export default function App() {
           </aside>
           {clave && <CambiarClave onCerrar={() => setClave(false)} />}
           <main className="contenido">
+            <Fallo>
             <Routes>
               {ver ? (
                 <>
@@ -201,8 +204,10 @@ export default function App() {
               <Route path="/operario" element={<Operario />} />
               <Route path="*" element={<Navigate to={ver ? '/' : '/operario'} replace />} />
             </Routes>
+            </Fallo>
           </main>
           {NAVEGADOR && <PedirCambio />}
+          {NAVEGADOR && <EstadoMotor />}
         </div>
       </Enrutador>
     </Ctx.Provider>

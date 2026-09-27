@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db import Base
@@ -14,6 +14,8 @@ from .enums import EstadoPlan, TipoPlan
 
 class Plan(Base):
     __tablename__ = "plan"
+    # como mucho un plan oficial activo, aunque dos personas regeneren el plan a la vez
+    __table_args__ = (Index("uq_plan_oficial_activo", "tipo", unique=True, sqlite_where=text("estado = 'ACTIVO' AND tipo = 'OFICIAL'"), postgresql_where=text("estado = 'ACTIVO' AND tipo = 'OFICIAL'")),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     nombre: Mapped[str] = mapped_column(String(120))

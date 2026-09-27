@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 import re
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ...config import ajustes
@@ -18,21 +18,22 @@ from ...planificacion import servicio as sv
 from ...servicios import materiales as mt
 from ...servicios.auditoria import auditar
 from ..deps import UsuarioActual, ahora, get_sesion, requiere
+from ..esquemas import Entrada
 
 router = APIRouter(prefix="/materiales", tags=["materiales"])
 
 
 @router.get("")
-def listado(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def listado(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     return mt.listado(s, ahora())
 
 
 @router.get("/detalle")
-def detalle(codigo: str, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def detalle(codigo: str, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     return mt.detalle(s, codigo, ahora())
 
 
-class MaterialIn(BaseModel):
+class MaterialIn(Entrada):
     codigo: str
     descripcion: str | None = None
     unidad: str | None = None
@@ -47,7 +48,7 @@ def _json(m: Material) -> dict:
 
 
 @router.post("")
-def guardar(datos: MaterialIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def guardar(datos: MaterialIn, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     """Alta o cambio de un material (por código de artículo). Dar stock empieza a controlarlo."""
     codigo = datos.codigo.strip()
     if not codigo:
@@ -71,7 +72,7 @@ def guardar(datos: MaterialIn, s: Session = Depends(get_sesion), u: UsuarioActua
 
 
 @router.delete("")
-def quitar(codigo: str, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def quitar(codigo: str, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     """Deja de controlar un material (se borran su stock y sus entradas)."""
     m = s.get(Material, codigo)
     if m is None:
@@ -82,7 +83,7 @@ def quitar(codigo: str, s: Session = Depends(get_sesion), u: UsuarioActual = Dep
     return {"codigo": codigo}
 
 
-class EntradaIn(BaseModel):
+class EntradaIn(Entrada):
     codigo: str
     cantidad: float
     fecha_prevista: datetime
@@ -90,7 +91,7 @@ class EntradaIn(BaseModel):
 
 
 @router.post("/entradas")
-def nueva_entrada(datos: EntradaIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def nueva_entrada(datos: EntradaIn, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     if datos.cantidad <= 0:
         raise HTTPException(400, "La cantidad tiene que ser mayor que cero")
     m = s.get(Material, datos.codigo)
@@ -105,7 +106,7 @@ def nueva_entrada(datos: EntradaIn, s: Session = Depends(get_sesion), u: Usuario
 
 
 @router.post("/entradas/{eid}/recibir")
-def recibir(eid: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def recibir(eid: int, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     e = s.get(EntradaMaterial, eid)
     if e is None:
         raise HTTPException(404, "Entrada inexistente")
@@ -118,7 +119,7 @@ def recibir(eid: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depen
 
 
 @router.delete("/entradas/{eid}")
-def anular_entrada(eid: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def anular_entrada(eid: int, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     e = s.get(EntradaMaterial, eid)
     if e is None:
         raise HTTPException(404, "Entrada inexistente")
@@ -129,7 +130,7 @@ def anular_entrada(eid: int, s: Session = Depends(get_sesion), u: UsuarioActual 
 
 
 @router.post("/calcular")
-def calcular(replanificar: bool = True, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
+def calcular(replanificar: bool = True, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
     """Aplica stock y entradas a las OF y, si se pide, regenera el plan con esa disponibilidad."""
     r = mt.calcular(s, u.usuario, ahora())
     if replanificar:
@@ -149,20 +150,25 @@ def numero_es(txt: str) -> float:
     elif re.fullmatch(r"-?\d{1,3}(\.\d{3})+", t):
         t = t.replace(".", "")  # 1.234 → miles
     v = float(t)
-    if v < 0:
-        raise ValueError("negativo")
+    if not math.isfinite(v) or v < 0 or v > 1e12:
+        raise ValueError("fuera de rango")
     return v
 
 
 @router.post("/importar")
-async def importar(fichero: UploadFile = File(...), s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+async def importar(fichero: UploadFile = File(...), s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     """CSV con columnas codigo;descripcion;unidad;stock (separador ; o ,; decimales con coma o punto)."""
     crudo = await fichero.read(ajustes().max_csv_mb * 1024 * 1024 + 1)
     if len(crudo) > ajustes().max_csv_mb * 1024 * 1024:
         raise HTTPException(413, f"El CSV supera el máximo de {ajustes().max_csv_mb} MB")
     texto = crudo.decode("utf-8-sig", errors="replace")
-    dialecto = csv.Sniffer().sniff(texto.splitlines()[0] if texto else "codigo;stock", delimiters=";,\t")
-    filas = list(csv.DictReader(io.StringIO(texto), dialect=dialecto))
+    cabecera = texto.splitlines()[0] if texto.strip() else ""
+    separador = next((c for c in (";", "\t", ",") if c in cabecera), None)
+    if separador is None:
+        raise HTTPException(400, "No parece un CSV: la primera línea debe llevar las columnas separadas por ; o , (codigo;descripcion;unidad;stock)")
+    filas = list(csv.DictReader(io.StringIO(texto), delimiter=separador))
+    if len(filas) > 50_000:
+        raise HTTPException(400, "Demasiadas filas (máximo 50.000)")
     hechos, errores = 0, []
     for i, f in enumerate(filas, start=2):
         f = {(k or "").strip().lower(): (v or "").strip() for k, v in f.items()}

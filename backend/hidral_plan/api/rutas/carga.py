@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ... import configuracion
 from ...servicios import carga as cg
 from ..deps import UsuarioActual, ahora, get_sesion, requiere
+from ..esquemas import Entrada
 
 router = APIRouter(tags=["carga de trabajo"])
 
@@ -17,7 +17,7 @@ def _no_existe(e: LookupError) -> HTTPException:
     return HTTPException(404, str(e))
 
 
-class CambioOperacion(BaseModel):
+class CambioOperacion(Entrada):
     minutos: float | None = None
     maquina: str | None = None
     seccion: str | None = None
@@ -27,14 +27,14 @@ class CambioOperacion(BaseModel):
 
 
 @router.patch("/operaciones/{op_id}")
-def editar_operacion(op_id: int, datos: CambioOperacion, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
+def editar_operacion(op_id: int, datos: CambioOperacion, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
     try:
         return cg.editar_operacion(s, op_id, datos.model_dump(exclude_unset=True, exclude={"motivo"}), u.usuario, datos.motivo)
     except LookupError as e:
         raise _no_existe(e) from e
 
 
-class NuevaOperacion(BaseModel):
+class NuevaOperacion(Entrada):
     tipo: str
     minutos: float
     seccion: str | None = None
@@ -46,7 +46,7 @@ class NuevaOperacion(BaseModel):
 
 
 @router.post("/ofs/{of_id}/operaciones")
-def anadir_operacion(of_id: int, datos: NuevaOperacion, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
+def anadir_operacion(of_id: int, datos: NuevaOperacion, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
     try:
         return cg.anadir_operacion(s, of_id, datos.model_dump(exclude={"motivo"}), u.usuario, datos.motivo)
     except LookupError as e:
@@ -54,14 +54,14 @@ def anadir_operacion(of_id: int, datos: NuevaOperacion, s: Session = Depends(get
 
 
 @router.delete("/operaciones/{op_id}")
-def quitar_operacion(op_id: int, motivo: str | None = None, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
+def quitar_operacion(op_id: int, motivo: str | None = None, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
     try:
         return cg.eliminar_operacion(s, op_id, u.usuario, motivo)
     except LookupError as e:
         raise _no_existe(e) from e
 
 
-class NuevaOF(BaseModel):
+class NuevaOF(Entrada):
     numero: str | None = None
     descripcion: str | None = None
     tanda_id: int | None = None
@@ -74,19 +74,19 @@ class NuevaOF(BaseModel):
 
 
 @router.post("/ofs")
-def crear_of(datos: NuevaOF, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
+def crear_of(datos: NuevaOF, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
     return cg.crear_of(s, datos.model_dump(), u.usuario)
 
 
 @router.delete("/ofs/{of_id}")
-def eliminar_of(of_id: int, motivo: str | None = None, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
+def eliminar_of(of_id: int, motivo: str | None = None, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("modificar_plan"))) -> dict:
     try:
         return cg.eliminar_of(s, of_id, u.usuario, motivo)
     except LookupError as e:
         raise _no_existe(e) from e
 
 
-class MoverCarga(BaseModel):
+class MoverCarga(Entrada):
     desde_maquina: str | None = None
     desde_seccion: str | None = None
     hacia_maquina: str | None = None
@@ -99,24 +99,24 @@ class MoverCarga(BaseModel):
 
 
 @router.post("/carga/mover")
-def mover(datos: MoverCarga, aplicar: bool = True, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
+def mover(datos: MoverCarga, aplicar: bool = True, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
     """Con aplicar=false solo dice cuánto se movería (vista previa)."""
     return cg.mover_carga(s, datos.model_dump(exclude_none=True), u.usuario, aplicar)
 
 
 @router.get("/carga")
-def carga(dias: int = 14, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def carga(dias: int = Query(14, ge=1, le=90), s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     return cg.resumen_carga(s, ahora(), dias)
 
 
-class Rendimiento(BaseModel):
+class Rendimiento(Entrada):
     seccion: str
     rendimiento: float
     motivo: str | None = None
 
 
 @router.put("/carga/rendimiento")
-def rendimiento(datos: Rendimiento, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
+def rendimiento(datos: Rendimiento, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("planificar"))) -> dict:
     if not 20 <= datos.rendimiento <= 300:
         raise HTTPException(400, "El rendimiento va de 20 % a 300 %")
     valor = dict(configuracion.obtener(s, "rendimiento_secciones"))

@@ -112,10 +112,24 @@ def migrar_columnas() -> list[str]:
                 lit = _literal(defecto, eng.dialect.name) if defecto is not None else None
                 con.execute(text(f'ALTER TABLE "{tabla.name}" ADD COLUMN "{col.name}" {tipo}' + (f" DEFAULT {lit}" if lit else "")))
                 hechas.append(f"{tabla.name}.{col.name}")
-    if hechas:
-        import logging
+    # índices nuevos (p.ej. los únicos que impiden dobles fichajes o dos planes activos)
+    import logging
 
-        logging.getLogger(__name__).warning("Esquema actualizado: columnas añadidas %s", ", ".join(hechas))
+    log = logging.getLogger(__name__)
+    insp = inspect(eng)
+    for tabla in Base.metadata.sorted_tables:
+        if not insp.has_table(tabla.name):
+            continue
+        existentes = {i["name"] for i in insp.get_indexes(tabla.name)}
+        for indice in tabla.indexes:
+            if indice.name and indice.name not in existentes:
+                try:
+                    indice.create(eng)
+                    hechas.append(f"índice {indice.name}")
+                except Exception as e:  # datos antiguos que lo incumplen: se avisa y se sigue
+                    log.error("No se pudo crear el índice %s: %s", indice.name, e)
+    if hechas:
+        log.warning("Esquema actualizado: %s", ", ".join(hechas))
     return hechas
 
 

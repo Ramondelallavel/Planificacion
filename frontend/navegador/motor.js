@@ -60,7 +60,34 @@ function unir(partes) {
   return salida
 }
 
+// Una sola pestaña a la vez escribe los datos de este navegador: dos pestañas guardando la misma
+// base en IndexedDB se pisarían. La pestaña que abre la aplicación toma un bloqueo (Web Locks);
+// si otra lo tiene, se pregunta al usuario y, si quiere seguir aquí, se le quita a la otra, que
+// deja de guardar en ese mismo momento.
+const BLOQUEO = 'hidral-datos'
+let desplazada = false
+function tomarBloqueo(robar) {
+  if (!navigator.locks) return Promise.resolve(true) // navegador antiguo: sin protección
+  return new Promise((ok) => {
+    navigator.locks
+      .request(BLOQUEO, robar ? { steal: true } : { ifAvailable: true }, (bloqueo) => {
+        ok(!!bloqueo)
+        // se retiene mientras viva la pestaña
+        return bloqueo ? new Promise(() => {}) : undefined
+      })
+      .catch((e) => {
+        if (e?.name !== 'AbortError') return ok(false)
+        // otra pestaña se ha quedado con los datos
+        desplazada = true
+        clearTimeout(temporizador)
+        avisar({ tipo: 'desplazada' })
+      })
+  })
+}
+const SIN_DATOS = 'Esta pestaña ya no tiene los datos: HIDRAL se ha abierto en otra pestaña. Recarga esta para volver a usarla aquí.'
+
 function sincronizar(cargar) {
+  if (desplazada && !cargar) return Promise.reject(new Error(SIN_DATOS))
   return new Promise((ok, mal) => py.FS.syncfs(cargar, (e) => (e ? mal(e) : ok())))
 }
 
@@ -71,7 +98,16 @@ function programarGuardado() {
   temporizador = setTimeout(() => {
     sincronizar(false).then(
       () => avisar({ tipo: 'guardado' }),
-      (e) => avisar({ tipo: 'aviso', mensaje: 'No se pudo guardar en el navegador: ' + (e?.message ?? e) }),
+      (e) => {
+        if (desplazada) return
+        const lleno = /quota/i.test(`${e?.name} ${e?.message}`)
+        avisar({
+          tipo: 'aviso',
+          mensaje: lleno
+            ? 'El navegador no tiene sitio para guardar los últimos cambios. Libera espacio o quita tandas antiguas y descarga una copia de seguridad en «Datos y copias».'
+            : 'No se pudieron guardar los últimos cambios en este navegador (' + (e?.message ?? e) + '). Descarga una copia de seguridad en «Datos y copias».',
+        })
+      },
     )
   }, 500)
 }
@@ -85,7 +121,16 @@ function existe(ruta) {
   }
 }
 
-async function arrancar() {
+async function arrancar({ robar } = {}) {
+  if (nav) return { base_nueva: false }
+  // al recargar, la página anterior tarda un momento en soltar el bloqueo: se reintenta unos
+  // segundos antes de decir que los datos están abiertos en otra pestaña
+  let libre = await tomarBloqueo(!!robar)
+  for (let i = 0; !libre && i < 20; i++) {
+    await new Promise((ok) => setTimeout(ok, 250))
+    libre = await tomarBloqueo(false)
+  }
+  if (!libre) return { ocupada: true }
   avisar({ tipo: 'carga', fase: 'Cargando Python (WebAssembly)', pct: 3 })
   manifiesto = await (await fetch(url('./paquetes.json'))).json()
   const biblioteca = unir(await Promise.all(manifiesto.biblioteca.partes.map(descargarBase64)))
@@ -139,7 +184,7 @@ async function procesarPendientes() {
   if (procesando || !nav) return
   procesando = true
   try {
-    for (;;) {
+    while (!desplazada) {
       const r = await enCola(() => aJs(nav.procesar_paso()))
       if (!r) break
       avisar({ tipo: 'procesando', ...r })
@@ -154,7 +199,12 @@ async function procesarPendientes() {
   }
 }
 
+function comprobarDatos() {
+  if (desplazada) throw new Error(SIN_DATOS)
+}
+
 async function peticion({ metodo, ruta, cabeceras, cuerpo }) {
+  comprobarDatos()
   const r = await enCola(async () => aJs(await nav.peticion(metodo, ruta, py.toPy(cabeceras ?? {}), cuerpo ?? null)))
   if (metodo !== 'GET' && r.estado < 400) {
     programarGuardado()
@@ -174,16 +224,30 @@ async function exportar() {
 }
 
 async function restaurar({ bytes }) {
+  comprobarDatos()
   await enCola(() => {
+    // primero se comprueba la copia; si no vale, los datos actuales ni se tocan
+    aJs(nav.validar_copia(bytes))
     nav.cerrar_conexiones()
+    const anterior = existe('/datos/hidral.db') ? py.FS.readFile('/datos/hidral.db') : null
+    // un diario pendiente es de la base anterior: aplicado a la copia la estropearía
+    if (existe('/datos/hidral.db-journal')) py.FS.unlink('/datos/hidral.db-journal')
     py.FS.writeFile('/datos/hidral.db', bytes)
-    nav.reabrir()
+    try {
+      nav.reabrir()
+    } catch (e) {
+      nav.cerrar_conexiones()
+      if (anterior) py.FS.writeFile('/datos/hidral.db', anterior)
+      nav.reabrir()
+      throw new Error('No se pudo abrir la copia; se conservan tus datos actuales. (' + mensajeDeError(e) + ')')
+    }
   })
   await sincronizar(false)
   return { respuesta: { ok: true } }
 }
 
 async function reiniciar({ conEjemplo }) {
+  comprobarDatos()
   await enCola(async () => {
     nav.cerrar_conexiones()
     for (const f of ['/datos/hidral.db', '/datos/hidral.db-journal']) if (existe(f)) py.FS.unlink(f)
@@ -195,7 +259,18 @@ async function reiniciar({ conEjemplo }) {
   return { respuesta: { ok: true } }
 }
 
-const ACCIONES = { arrancar: async () => ({ respuesta: await arrancar() }), peticion, exportar, restaurar, reiniciar }
+// Un error de Python llega con toda la traza: a la persona solo le sirve la última línea
+// («ValueError: La copia está dañada…»), sin el nombre de la excepción; la traza, a la consola.
+function mensajeDeError(err) {
+  const texto = String(err?.message ?? err)
+  if (!texto.includes('Traceback (most recent call last)')) return texto.slice(-4000)
+  console.warn(texto)
+  const ultima = texto.trim().split('\n').pop().trim()
+  const m = ultima.match(/^(?:[\w.]+(?:Error|Exception|Rechazado|Bloqueado)): (.+)$/s)
+  return m ? m[1] : ultima
+}
+
+const ACCIONES = { arrancar: async (d) => ({ respuesta: await arrancar(d) }), peticion, exportar, restaurar, reiniciar }
 
 onmessage = async (e) => {
   const { id, accion, datos } = e.data
@@ -203,6 +278,6 @@ onmessage = async (e) => {
     const { respuesta, transferir } = await ACCIONES[accion](datos ?? {})
     avisar({ id, ok: true, respuesta }, transferir)
   } catch (err) {
-    avisar({ id, ok: false, error: String(err?.message ?? err).slice(-4000) })
+    avisar({ id, ok: false, error: mensajeDeError(err) })
   }
 }

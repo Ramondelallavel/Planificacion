@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..db import Base
@@ -13,6 +13,10 @@ from .comun import ahora
 
 class Fichaje(Base):
     __tablename__ = "fichaje"
+    # un operario no puede tener dos trabajos abiertos a la vez, ni aunque lleguen dos peticiones juntas
+    __table_args__ = (
+        Index("uq_fichaje_abierto_por_operario", "operario_id", unique=True, sqlite_where=text("estado IN ('ABIERTO', 'PAUSADO')"), postgresql_where=text("estado IN ('ABIERTO', 'PAUSADO')")),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     operario_id: Mapped[int] = mapped_column(ForeignKey("operario.id"), index=True)

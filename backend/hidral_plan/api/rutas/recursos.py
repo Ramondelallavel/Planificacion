@@ -7,7 +7,6 @@ import re
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -31,10 +30,11 @@ from ...modelos import (
     Turno,
     Usuario,
 )
-from ...modelos.enums import EstadoOperacion, Fuente
+from ...modelos.enums import EstadoOperacion, EstadoRecurso, Fuente, TipoRecurso
 from ...servicios.auditoria import auditar
 from ...servicios.operaciones import derivar_operaciones
 from ..deps import UsuarioActual, ahora, get_sesion, requiere
+from ..esquemas import Entrada
 
 router = APIRouter(tags=["configuración de fábrica"])
 
@@ -51,21 +51,79 @@ def _rec(r: Recurso, s: Session) -> dict:
 
 
 @router.get("/secciones")
-def secciones(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def secciones(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     return [
         {"codigo": x.codigo, "codigo_completo": x.codigo_completo, "nombre": x.nombre, "flujo": x.flujo, "requiere_programacion": x.requiere_programacion, "conocida": x.conocida, "fuente": x.fuente}
         for x in s.scalars(select(Seccion).order_by(Seccion.codigo))
     ]
 
 
-class SeccionIn(BaseModel):
+class SeccionIn(Entrada):
     nombre: str | None = None
     flujo: str | None = None
     requiere_programacion: bool | None = None
 
 
+_CODIGO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-/]*$")
+
+
+def _texto(valor: str | None, campo: str, maximo: int, obligatorio: bool = False) -> str | None:
+    v = (valor or "").strip()
+    if obligatorio and not v:
+        raise HTTPException(400, f"Falta {campo}")
+    if len(v) > maximo:
+        raise HTTPException(400, f"{campo}: máximo {maximo} caracteres")
+    return v or None
+
+
+def _codigo(valor: str | None, campo: str, maximo: int) -> str:
+    v = _texto(valor, campo, maximo, obligatorio=True) or ""
+    if not _CODIGO.match(v):
+        raise HTTPException(400, f"{campo}: solo letras, números y . - _ / (sin espacios)")
+    return v
+
+
+def _seccion_existe(s: Session, codigo: str | None) -> None:
+    if codigo and s.get(Seccion, codigo) is None:
+        raise HTTPException(400, f"No existe la sección {codigo}. Créala antes en Configuración → Secciones.")
+
+
+def _turnos_existen(s: Session, codigos: list[str] | None) -> None:
+    faltan = [c for c in codigos or [] if s.get(Turno, c) is None]
+    if faltan:
+        raise HTTPException(400, f"No existe el turno {', '.join(faltan)}")
+
+
+def _recursos_existen(s: Session, codigos: list[str] | None) -> None:
+    conocidos = set(s.scalars(select(Recurso.codigo)))
+    faltan = [c for c in codigos or [] if c not in conocidos]
+    if faltan:
+        raise HTTPException(400, f"No existe la máquina {', '.join(faltan[:5])}")
+
+
+class SeccionNueva(Entrada):
+    codigo: str
+    nombre: str | None = None
+    flujo: str | None = None
+    requiere_programacion: bool = False
+
+
+@router.post("/secciones")
+def crear_seccion(datos: SeccionNueva, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+    codigo = _codigo(datos.codigo, "Código de sección", 32).upper()
+    if s.get(Seccion, codigo) is not None:
+        raise HTTPException(409, f"Ya existe la sección {codigo}")
+    x = Seccion(
+        codigo=codigo, nombre=_texto(datos.nombre, "Nombre", 120), flujo=(_texto(datos.flujo, "Flujo", 24) or "NORMAL").upper(),
+        requiere_programacion=datos.requiere_programacion, conocida=True, fuente=Fuente.USUARIO,
+    )
+    s.add(x)
+    auditar(s, u.usuario, "CREAR_SECCION", "SECCION", codigo, despues=datos.model_dump())
+    return {"codigo": codigo}
+
+
 @router.patch("/secciones/{codigo}")
-def cambiar_seccion(codigo: str, datos: SeccionIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def cambiar_seccion(codigo: str, datos: SeccionIn, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     x = s.get(Seccion, codigo)
     if x is None:
         raise HTTPException(404, "Sección inexistente")
@@ -78,11 +136,11 @@ def cambiar_seccion(codigo: str, datos: SeccionIn, s: Session = Depends(get_sesi
 
 
 @router.get("/recursos")
-def recursos(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def recursos(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     return [_rec(r, s) for r in s.scalars(select(Recurso).order_by(Recurso.seccion_codigo, Recurso.codigo))]
 
 
-class RecursoIn(BaseModel):
+class RecursoIn(Entrada):
     codigo: str | None = None
     nombre: str | None = None
     tipo: str | None = None
@@ -97,10 +155,28 @@ class RecursoIn(BaseModel):
     estado: str | None = None
 
 
+def _validar_recurso(s: Session, datos: RecursoIn) -> None:
+    if datos.nombre is not None:
+        datos.nombre = _texto(datos.nombre, "Nombre", 120, obligatorio=True)
+    if datos.tipo is not None and datos.tipo not in {t.value for t in TipoRecurso}:
+        raise HTTPException(400, f"Tipo de recurso no válido: {datos.tipo} (MAQUINA, PUESTO o PROGRAMACION)")
+    if datos.estado is not None and datos.estado not in {e.value for e in EstadoRecurso}:
+        raise HTTPException(400, f"Estado no válido: {datos.estado}")
+    if datos.capacidad is not None and not 1 <= datos.capacidad <= 100:
+        raise HTTPException(400, "La capacidad (unidades en paralelo) va de 1 a 100")
+    _seccion_existe(s, datos.seccion)
+    _turnos_existen(s, datos.turnos)
+    for lista, campo in ((datos.operaciones, "Operaciones"), (datos.alias, "Alias")):
+        for x in lista or []:
+            _texto(x, campo, 64)
+
+
 @router.post("/recursos")
-def crear_recurso(datos: RecursoIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def crear_recurso(datos: RecursoIn, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     if not datos.codigo or not datos.nombre or not datos.seccion:
         raise HTTPException(400, "codigo, nombre y seccion son obligatorios")
+    datos.codigo = _codigo(datos.codigo, "Código de máquina", 64)
+    _validar_recurso(s, datos)
     if s.scalar(select(Recurso).where(Recurso.codigo == datos.codigo)):
         raise HTTPException(409, "Ya existe un recurso con ese código")
     r = Recurso(
@@ -115,12 +191,14 @@ def crear_recurso(datos: RecursoIn, s: Session = Depends(get_sesion), u: Usuario
 
 
 @router.patch("/recursos/{rid}")
-def cambiar_recurso(rid: int, datos: RecursoIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def cambiar_recurso(rid: int, datos: RecursoIn, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     r = s.get(Recurso, rid)
     if r is None:
         raise HTTPException(404, "Recurso inexistente")
     antes = _rec(r, s)
+    _validar_recurso(s, datos)
     campos = datos.model_dump(exclude_unset=True)
+    campos.pop("codigo", None)  # el código no se cambia: lo referencian operaciones y cualificaciones
     if "seccion" in campos:
         r.seccion_codigo = campos.pop("seccion")
     for k, v in campos.items():
@@ -139,13 +217,13 @@ def _con_historia_recurso(s: Session, r: Recurso) -> str | None:
     return None
 
 
-class Duplicar(BaseModel):
+class Duplicar(Entrada):
     cantidad: int = 1
     copiar_cualificaciones: bool = True
 
 
 @router.post("/recursos/{rid}/duplicar")
-def duplicar_recurso(rid: int, datos: Duplicar, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def duplicar_recurso(rid: int, datos: Duplicar, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     """Añade máquinas iguales a una existente (mismas operaciones, turnos y alias) y, si se pide,
     cualifica en ellas a los operarios que ya lo estaban en la original."""
     r = s.get(Recurso, rid)
@@ -178,7 +256,7 @@ def duplicar_recurso(rid: int, datos: Duplicar, s: Session = Depends(get_sesion)
 
 
 @router.delete("/recursos/{rid}")
-def eliminar_recurso(rid: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def eliminar_recurso(rid: int, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     """Quita una máquina. Si tiene historia (fichajes, planes, incidencias) se da de baja (inactiva)
     en vez de borrarla, para no perder la trazabilidad."""
     r = s.get(Recurso, rid)
@@ -204,7 +282,7 @@ def eliminar_recurso(rid: int, s: Session = Depends(get_sesion), u: UsuarioActua
 
 
 @router.get("/operarios")
-def operarios(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def operarios(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     ahora_ = ahora()
     ausentes = {a.operario_id: a for a in s.scalars(select(Ausencia).where(Ausencia.inicio <= ahora_, (Ausencia.fin.is_(None)) | (Ausencia.fin > ahora_)))}
     return [
@@ -217,7 +295,7 @@ def operarios(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requi
     ]
 
 
-class OperarioIn(BaseModel):
+class OperarioIn(Entrada):
     codigo: str | None = None
     nombre: str | None = None
     turno: str | None = None
@@ -227,10 +305,28 @@ class OperarioIn(BaseModel):
     operaciones: list[str] | None = None
 
 
+def _validar_operario(s: Session, datos: OperarioIn) -> None:
+    if datos.nombre is not None:
+        datos.nombre = _texto(datos.nombre, "Nombre", 120, obligatorio=True)
+    if datos.turno:
+        _turnos_existen(s, [datos.turno])
+    elif datos.turno == "":
+        datos.turno = None  # «sin turno» (solo si se indicó: en un cambio parcial no se toca)
+    if datos.seccion:
+        _seccion_existe(s, datos.seccion)
+    _recursos_existen(s, datos.recursos)
+    for t in datos.operaciones or []:
+        _texto(t, "Tipo de operación", 32)
+
+
 @router.post("/operarios")
-def crear_operario(datos: OperarioIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def crear_operario(datos: OperarioIn, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     if not datos.codigo or not datos.nombre:
         raise HTTPException(400, "codigo y nombre son obligatorios")
+    datos.codigo = _codigo(datos.codigo, "Código de empleado", 32)
+    _validar_operario(s, datos)
+    if s.scalar(select(Operario.id).where(Operario.codigo_empleado == datos.codigo)):
+        raise HTTPException(409, f"Ya existe el operario {datos.codigo}")
     o = Operario(codigo_empleado=datos.codigo, nombre=datos.nombre, turno_codigo=datos.turno, seccion_codigo=datos.seccion)
     o.cualificaciones = [Cualificacion(recurso_codigo=r) for r in datos.recursos or []] + [Cualificacion(tipo_operacion=t) for t in datos.operaciones or []]
     s.add(o)
@@ -239,7 +335,7 @@ def crear_operario(datos: OperarioIn, s: Session = Depends(get_sesion), u: Usuar
     return {"id": o.id}
 
 
-class LoteOperarios(BaseModel):
+class LoteOperarios(Entrada):
     cantidad: int
     copiar_de: int | None = None
     turno: str | None = None
@@ -250,7 +346,7 @@ class LoteOperarios(BaseModel):
 
 
 @router.post("/operarios/lote")
-def alta_en_lote(datos: LoteOperarios, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def alta_en_lote(datos: LoteOperarios, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     """Da de alta varios operarios iguales (p.ej. refuerzo de un equipo): mismo turno y
     cualificaciones que uno existente, o las que se indiquen."""
     if not 1 <= datos.cantidad <= 50:
@@ -287,7 +383,7 @@ def alta_en_lote(datos: LoteOperarios, s: Session = Depends(get_sesion), u: Usua
 
 
 @router.delete("/operarios/{oid}")
-def eliminar_operario(oid: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def eliminar_operario(oid: int, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     """Quita un operario; si ya tiene historia (fichajes, planes, usuario) se da de baja en vez de borrarlo."""
     o = s.get(Operario, oid)
     if o is None:
@@ -311,10 +407,11 @@ def eliminar_operario(oid: int, s: Session = Depends(get_sesion), u: UsuarioActu
 
 
 @router.patch("/operarios/{oid}")
-def cambiar_operario(oid: int, datos: OperarioIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def cambiar_operario(oid: int, datos: OperarioIn, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     o = s.get(Operario, oid)
     if o is None:
         raise HTTPException(404, "Operario inexistente")
+    _validar_operario(s, datos)
     antes = {"turno": o.turno_codigo, "activo": o.activo, "cualificaciones": [(c.recurso_codigo, c.tipo_operacion) for c in o.cualificaciones]}
     c = datos.model_dump(exclude_unset=True)
     if "nombre" in c:
@@ -332,11 +429,11 @@ def cambiar_operario(oid: int, datos: OperarioIn, s: Session = Depends(get_sesio
 
 
 @router.get("/turnos")
-def turnos(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def turnos(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     return [{"codigo": t.codigo, "nombre": t.nombre, "hora_inicio": t.hora_inicio, "hora_fin": t.hora_fin, "dias_semana": t.dias_semana, "pausas": t.pausas, "activo": t.activo} for t in s.scalars(select(Turno))]
 
 
-class TurnoIn(BaseModel):
+class TurnoIn(Entrada):
     codigo: str
     nombre: str
     hora_inicio: str
@@ -361,7 +458,7 @@ def _validar_turno(datos: TurnoIn) -> None:
 
 
 @router.put("/turnos/{codigo}")
-def guardar_turno(codigo: str, datos: TurnoIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def guardar_turno(codigo: str, datos: TurnoIn, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     _validar_turno(datos)
     t = s.get(Turno, codigo) or Turno(codigo=codigo)
     antes = {"hora_inicio": t.hora_inicio, "hora_fin": t.hora_fin, "dias": t.dias_semana} if t.nombre else None
@@ -372,7 +469,7 @@ def guardar_turno(codigo: str, datos: TurnoIn, s: Session = Depends(get_sesion),
 
 
 @router.get("/tiempos-estandar")
-def tiempos(todos: bool = False, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
+def tiempos(todos: bool = False, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> list[dict]:
     q = select(TiempoEstandar).order_by(TiempoEstandar.seccion_codigo, TiempoEstandar.tipo_operacion, TiempoEstandar.version.desc())
     if not todos:
         q = q.where(TiempoEstandar.vigente.is_(True))
@@ -386,7 +483,7 @@ def tiempos(todos: bool = False, s: Session = Depends(get_sesion), _: UsuarioAct
     ]
 
 
-class TiempoIn(BaseModel):
+class TiempoIn(Entrada):
     seccion: str
     grupo_hf: str | None = None
     articulo: str | None = None
@@ -398,8 +495,13 @@ class TiempoIn(BaseModel):
 
 
 @router.post("/tiempos-estandar")
-def nuevo_tiempo(datos: TiempoIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("configurar"))) -> dict:
+def nuevo_tiempo(datos: TiempoIn, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("configurar"))) -> dict:
     """Crea una NUEVA versión; la anterior del mismo ámbito queda como histórico (no se sobreescribe)."""
+    _seccion_existe(s, datos.seccion)
+    if min(datos.minutos_preparacion, datos.minutos_por_unidad, datos.minutos_por_linea) < 0:
+        raise HTTPException(400, "Los minutos no pueden ser negativos")
+    if not (datos.minutos_preparacion or datos.minutos_por_unidad or datos.minutos_por_linea):
+        raise HTTPException(400, "Un tiempo estándar necesita algún minuto (preparación, por unidad o por línea)")
     previos = list(
         s.scalars(
             select(TiempoEstandar).where(
@@ -424,7 +526,7 @@ def nuevo_tiempo(datos: TiempoIn, s: Session = Depends(get_sesion), u: UsuarioAc
 
 
 @router.post("/tiempos-estandar/recalcular")
-def recalcular(s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("configurar"))) -> dict:
+def recalcular(s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("configurar"))) -> dict:
     """Vuelve a derivar operaciones y duraciones de las OF no iniciadas con la configuración vigente."""
     of_ids = [i for (i,) in s.execute(select(OrdenFabricacion.id).where(OrdenFabricacion.estado.not_in(["TERMINADA", "VALIDADA"])))]
     r = derivar_operaciones(s, of_ids, None, u.usuario)
@@ -434,17 +536,17 @@ def recalcular(s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requ
 
 
 @router.get("/configuracion")
-def config(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def config(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     return configuracion.todos(s)
 
 
-class ParametroIn(BaseModel):
+class ParametroIn(Entrada):
     valor: dict
     motivo: str | None = None
 
 
 @router.put("/configuracion/{clave}")
-def guardar_config(clave: str, datos: ParametroIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("configurar"))) -> dict:
+def guardar_config(clave: str, datos: ParametroIn, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("configurar"))) -> dict:
     try:
         f = configuracion.guardar(s, clave, datos.valor, u.usuario, datos.motivo)
     except KeyError as e:
@@ -454,14 +556,14 @@ def guardar_config(clave: str, datos: ParametroIn, s: Session = Depends(get_sesi
     return {"clave": clave, "version": f.version}
 
 
-class AusenciaIn(BaseModel):
+class AusenciaIn(Entrada):
     inicio: datetime
     fin: datetime | None = None
     motivo: str
 
 
 @router.post("/operarios/{oid}/ausencias")
-def ausencia(oid: int, datos: AusenciaIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def ausencia(oid: int, datos: AusenciaIn, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     """Ausencia planificada (vacaciones, formación). Para una ausencia imprevista con
     replanificación usar POST /incidencias con tipo AUSENCIA."""
     if s.get(Operario, oid) is None:
@@ -475,7 +577,7 @@ def ausencia(oid: int, datos: AusenciaIn, s: Session = Depends(get_sesion), u: U
 
 # ------------------------------------------------------------------ calendario laboral
 @router.get("/calendario")
-def calendario(desde: date | None = None, s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
+def calendario(desde: date | None = None, s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("ver"))) -> dict:
     """Festivos y jornadas extra (turnos fuera del calendario habitual) a partir de `desde`."""
     desde = desde or ahora().date().replace(day=1)
     return {
@@ -487,13 +589,13 @@ def calendario(desde: date | None = None, s: Session = Depends(get_sesion), _: U
     }
 
 
-class FestivoIn(BaseModel):
+class FestivoIn(Entrada):
     fecha: date
     descripcion: str | None = None
 
 
 @router.post("/calendario/festivos")
-def nuevo_festivo(datos: FestivoIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def nuevo_festivo(datos: FestivoIn, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     f = s.get(Festivo, datos.fecha) or Festivo(fecha=datos.fecha)
     f.descripcion = datos.descripcion
     s.add(f)
@@ -502,7 +604,7 @@ def nuevo_festivo(datos: FestivoIn, s: Session = Depends(get_sesion), u: Usuario
 
 
 @router.delete("/calendario/festivos/{fecha}")
-def quitar_festivo(fecha: date, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def quitar_festivo(fecha: date, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     f = s.get(Festivo, fecha)
     if f is None:
         raise HTTPException(404, "Ese día no es festivo")
@@ -511,7 +613,7 @@ def quitar_festivo(fecha: date, s: Session = Depends(get_sesion), u: UsuarioActu
     return {"fecha": fecha.isoformat()}
 
 
-class JornadaExtraIn(BaseModel):
+class JornadaExtraIn(Entrada):
     fecha: date
     turno: str
     secciones: list[str] | None = None
@@ -519,7 +621,7 @@ class JornadaExtraIn(BaseModel):
 
 
 @router.post("/calendario/jornadas-extra")
-def nueva_jornada_extra(datos: JornadaExtraIn, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def nueva_jornada_extra(datos: JornadaExtraIn, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     if s.get(Turno, datos.turno) is None:
         raise HTTPException(400, f"Turno desconocido: {datos.turno}")
     j = JornadaExtra(fecha=datos.fecha, turno_codigo=datos.turno, secciones=datos.secciones or None, motivo=datos.motivo, creado_por=u.usuario)
@@ -530,7 +632,7 @@ def nueva_jornada_extra(datos: JornadaExtraIn, s: Session = Depends(get_sesion),
 
 
 @router.delete("/calendario/jornadas-extra/{jid}")
-def quitar_jornada_extra(jid: int, s: Session = Depends(get_sesion), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
+def quitar_jornada_extra(jid: int, s: Session = Depends(get_sesion, scope="function"), u: UsuarioActual = Depends(requiere("recursos"))) -> dict:
     j = s.get(JornadaExtra, jid)
     if j is None:
         raise HTTPException(404, "Jornada extra inexistente")

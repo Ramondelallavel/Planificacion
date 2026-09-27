@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import secrets
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -12,13 +12,23 @@ from ...modelos.comun import ahora as reloj
 from ...seguridad import PERMISOS, emitir_token, hash_clave, verificar_clave
 from ...servicios.auditoria import auditar
 from ..deps import UsuarioActual, get_sesion, requiere, usuario_actual
+from ..esquemas import Entrada
 
 router = APIRouter(prefix="/auth", tags=["autenticación"])
 
 
-class Login(BaseModel):
+class Login(Entrada):
     usuario: str
     clave: str
+
+
+_FICTICIO: list[str] = []
+
+
+def _hash_ficticio() -> str:
+    if not _FICTICIO:
+        _FICTICIO.append(hash_clave(secrets.token_hex(16)))
+    return _FICTICIO[0]
 
 
 INTENTOS_MAX = 5
@@ -35,11 +45,15 @@ def _fallos_recientes(s: Session, usuario: str) -> int:
 
 
 @router.post("/login")
-def login(datos: Login, s: Session = Depends(get_sesion)) -> dict:
+def login(datos: Login, s: Session = Depends(get_sesion, scope="function")) -> dict:
     usuario = datos.usuario.strip()[:80]
     if _fallos_recientes(s, usuario) >= INTENTOS_MAX:
         raise HTTPException(429, f"Demasiados intentos fallidos. Espera {VENTANA_MIN} minutos o pide a un administrador que revise la cuenta.")
     u = s.scalar(select(Usuario).where(Usuario.usuario == usuario, Usuario.activo.is_(True)))
+    # con un usuario inexistente se verifica igual contra un hash ficticio: la respuesta tarda lo
+    # mismo y no revela qué usuarios existen
+    if u is None:
+        verificar_clave(datos.clave, _hash_ficticio())
     if u is None or not verificar_clave(datos.clave, u.hash_clave):
         auditar(s, usuario, "LOGIN_FALLIDO")
         s.commit()
@@ -62,7 +76,7 @@ def yo(u: UsuarioActual = Depends(usuario_actual)) -> dict:
     return {"usuario": u.usuario, "rol": u.rol, "operario_id": u.operario_id, "permisos": sorted(PERMISOS.get(u.rol, set()))}
 
 
-class CambioClave(BaseModel):
+class CambioClave(Entrada):
     actual: str
     nueva: str
 
@@ -73,7 +87,7 @@ def validar_clave(clave: str) -> None:
 
 
 @router.post("/clave")
-def cambiar_clave(datos: CambioClave, s: Session = Depends(get_sesion), yo_: UsuarioActual = Depends(usuario_actual)) -> dict:
+def cambiar_clave(datos: CambioClave, s: Session = Depends(get_sesion, scope="function"), yo_: UsuarioActual = Depends(usuario_actual)) -> dict:
     u = s.scalar(select(Usuario).where(Usuario.usuario == yo_.usuario))
     if u is None or not verificar_clave(datos.actual, u.hash_clave):
         raise HTTPException(400, "La contraseña actual no es correcta")
@@ -92,11 +106,11 @@ usuarios = APIRouter(prefix="/usuarios", tags=["usuarios"])
 
 
 @usuarios.get("")
-def listar_usuarios(s: Session = Depends(get_sesion), _: UsuarioActual = Depends(requiere("usuarios"))) -> list[dict]:
+def listar_usuarios(s: Session = Depends(get_sesion, scope="function"), _: UsuarioActual = Depends(requiere("usuarios"))) -> list[dict]:
     return [_json(u) for u in s.scalars(select(Usuario).order_by(Usuario.usuario))]
 
 
-class UsuarioIn(BaseModel):
+class UsuarioIn(Entrada):
     usuario: str | None = None
     nombre: str | None = None
     rol: str | None = None
@@ -113,7 +127,7 @@ def _validar_rol_y_operario(s: Session, datos: UsuarioIn) -> None:
 
 
 @usuarios.post("")
-def crear_usuario(datos: UsuarioIn, s: Session = Depends(get_sesion), yo_: UsuarioActual = Depends(requiere("usuarios"))) -> dict:
+def crear_usuario(datos: UsuarioIn, s: Session = Depends(get_sesion, scope="function"), yo_: UsuarioActual = Depends(requiere("usuarios"))) -> dict:
     nombre_usuario = (datos.usuario or "").strip().lower()
     if not nombre_usuario or not datos.nombre or not datos.rol or not datos.clave:
         raise HTTPException(400, "Usuario, nombre, rol y contraseña son obligatorios")
@@ -129,7 +143,7 @@ def crear_usuario(datos: UsuarioIn, s: Session = Depends(get_sesion), yo_: Usuar
 
 
 @usuarios.patch("/{usuario}")
-def cambiar_usuario(usuario: str, datos: UsuarioIn, s: Session = Depends(get_sesion), yo_: UsuarioActual = Depends(requiere("usuarios"))) -> dict:
+def cambiar_usuario(usuario: str, datos: UsuarioIn, s: Session = Depends(get_sesion, scope="function"), yo_: UsuarioActual = Depends(requiere("usuarios"))) -> dict:
     u = s.scalar(select(Usuario).where(Usuario.usuario == usuario))
     if u is None:
         raise HTTPException(404, "Usuario inexistente")

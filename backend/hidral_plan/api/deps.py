@@ -15,6 +15,9 @@ from ..seguridad import leer_token, tiene_permiso
 
 
 def get_sesion() -> Iterator[Session]:
+    """Sesión de base de datos de una petición. Se usa siempre con scope="function": el commit
+    ocurre ANTES de enviar la respuesta, así un error al grabar llega al cliente como error (y no
+    como un «OK» de algo que no se ha guardado)."""
     s = fabrica_sesiones()()
     try:
         yield s
@@ -36,7 +39,7 @@ class UsuarioActual:
         return tiene_permiso(self.rol, permiso)
 
 
-def usuario_actual(authorization: str | None = Header(default=None), s: Session = Depends(get_sesion)) -> UsuarioActual:
+def usuario_actual(authorization: str | None = Header(default=None), s: Session = Depends(get_sesion, scope="function")) -> UsuarioActual:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Falta el token de acceso")
     datos = leer_token(authorization.split(" ", 1)[1])

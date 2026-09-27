@@ -109,6 +109,13 @@ def registrar_documento(temporal: Path, nombre: str, usuario: str) -> ResultadoC
             s.flush()
             auditar(s, usuario, "IMPORTACION_ERROR", "DOCUMENTO", d.id, despues={"error": str(exc)})
             return ResultadoCarga(d.id, None, False, False, 1, f"El fichero no es un PDF legible: {exc}")
+        if n > ajustes().max_paginas or n == 0:
+            motivo = f"El PDF tiene {n} páginas: el máximo es {ajustes().max_paginas}" if n else "El PDF no tiene páginas"
+            d = Documento(nombre=nombre, hash_sha256=h, tamano_bytes=tam, num_paginas=n, usuario_carga=usuario, estado=EstadoDocumento.ERROR, ruta_almacen=str(ruta), resumen={"error": motivo})
+            s.add(d)
+            s.flush()
+            auditar(s, usuario, "IMPORTACION_ERROR", "DOCUMENTO", d.id, despues={"error": motivo})
+            return ResultadoCarga(d.id, None, False, False, 1, motivo)
         anterior = None
         if clave:
             anterior = s.scalar(select(Documento).where(Documento.clave_logica == clave, Documento.estado != EstadoDocumento.ERROR).order_by(Documento.version.desc()))
